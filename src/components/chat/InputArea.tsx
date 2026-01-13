@@ -7,7 +7,7 @@ import { LiveSessionState } from '../../../hooks/speech/useGeminiLiveConversatio
 import { 
   IconSend, IconPaperclip, IconMicrophone, IconXMark, IconCamera, 
   IconCameraFront, IconBookOpen, IconPencil, IconPlus, IconSparkles, 
-  IMAGE_GEN_CAMERA_ID, IconUndo, IconCheck, IconSave, IconFolderOpen, IconTrash, IconCog
+  IMAGE_GEN_CAMERA_ID, IconUndo, IconCheck, IconSave, IconFolderOpen, IconTrash, IconRobot, IconSpeaker
 } from '../../../constants';
 import { SmallSpinner } from '../ui/SmallSpinner';
 import SttLanguageSelector from './SttLanguageSelector';
@@ -162,8 +162,9 @@ const InputArea: React.FC<InputAreaProps> = ({
   const [resetConfirm, setResetConfirm] = useState<string>('');
   const [isResetting, setIsResetting] = useState(false);
 
-  // Settings
-  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  // Profile editing inside input area
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileText, setProfileText] = useState('');
 
   const saveTokenRef = useRef<string | null>(null);
   const loadTokenRef = useRef<string | null>(null);
@@ -280,23 +281,23 @@ const InputArea: React.FC<InputAreaProps> = ({
     }
   };
 
-  const handleEditGlobalProfile = async () => {
+  const startProfileEdit = async () => {
     try {
-      // 1. Fetch current profile
       const current = (await getGlobalProfileDB())?.text ?? '';
-      
-      // 2. Prompt user (Native prompt is fine for now, or use a custom modal)
-      const next = window.prompt('Edit global profile', current);
-      
-      // 3. Save if changed
-      if (next !== null) {
-        const trimmed = next.trim();
-        await setGlobalProfileDB(trimmed);
-        // 4. Notify app to refresh context
-        try { window.dispatchEvent(new CustomEvent('globalProfileUpdated')); } catch {}
-      }
-    } catch (e) {
-      console.error("Failed to update profile", e);
+      setProfileText(current);
+      setIsEditingProfile(true);
+    } catch {
+      setProfileText('');
+      setIsEditingProfile(true);
+    }
+  };
+
+  const handleProfileSave = async () => {
+    try {
+      await setGlobalProfileDB(profileText.trim());
+      try { window.dispatchEvent(new CustomEvent('globalProfileUpdated')); } catch {}
+    } finally {
+      setIsEditingProfile(false);
     }
   };
 
@@ -811,7 +812,7 @@ const InputArea: React.FC<InputAreaProps> = ({
    }, [sttLanguageCode, targetLanguageDef, nativeLanguageDef]);
 
   const getPlaceholderText = () => {
-    if (isLanguageSelectionOpen) return "Select languages above...";
+    if (isLanguageSelectionOpen) return "";
     if (prepDisplay) return prepDisplay;
      if (isSuggestionMode) {
          if (isCreatingSuggestion) return t('chat.suggestion.creating');
@@ -1280,26 +1281,76 @@ const InputArea: React.FC<InputAreaProps> = ({
 
       <div className={`relative w-full flex flex-col rounded-3xl overflow-hidden transition-colors ${containerClass}`}>
         {isLanguageSelectionOpen ? (
-          <div className="w-full py-3 px-4 min-h-[50px] flex items-center gap-3">
+          <div className="w-full py-3 px-4 min-h-[50px] flex items-center justify-between gap-3">
             {resetMode ? (
                <>
-                 <span className="text-xs font-semibold text-white uppercase whitespace-nowrap">Reset:</span>
-                 <input 
-                    className="flex-1 min-w-0 bg-white/20 border border-white/30 rounded px-2 py-1 text-sm text-white placeholder-white/50 focus:outline-none focus:border-white"
-                    placeholder="Type DELETE"
-                    value={resetConfirm}
-                    onChange={(e) => setResetConfirm(e.target.value)}
-                 />
-                 <button onClick={handleResetConfirm} disabled={resetConfirm !== 'DELETE'} className="p-1.5 bg-red-500 rounded-full text-white disabled:opacity-50 hover:bg-red-600">
-                    <IconCheck className="w-4 h-4" />
-                 </button>
-                 <button onClick={() => { setResetMode(false); setResetConfirm(''); }} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
-                    <IconUndo className="w-4 h-4" />
-                 </button>
+                 <div className="flex items-center gap-2 flex-1">
+                   <span className="text-xs font-semibold text-white uppercase whitespace-nowrap">Reset:</span>
+                   <input 
+                      className="flex-1 min-w-0 bg-white/20 border border-white/30 rounded px-2 py-1 text-sm text-white placeholder-white/50 focus:outline-none focus:border-white"
+                      placeholder="Type DELETE"
+                      value={resetConfirm}
+                      onChange={(e) => setResetConfirm(e.target.value)}
+                   />
+                 </div>
+                 <div className="flex items-center gap-2">
+                   <button onClick={handleResetConfirm} disabled={resetConfirm !== 'DELETE'} className="p-1.5 bg-red-500 rounded-full text-white disabled:opacity-50 hover:bg-red-600">
+                      <IconCheck className="w-4 h-4" />
+                   </button>
+                   <button onClick={() => { setResetMode(false); setResetConfirm(''); }} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
+                      <IconUndo className="w-4 h-4" />
+                   </button>
+                 </div>
+               </>
+            ) : isEditingProfile ? (
+               <>
+                 <div className="flex items-center gap-2 flex-1">
+                   <span className="text-xs font-semibold text-white uppercase whitespace-nowrap">Profile:</span>
+                   <input 
+                      className="flex-1 min-w-0 bg-white/20 border border-white/30 rounded px-2 py-1 text-sm text-white placeholder-white/50 focus:outline-none focus:border-white"
+                      placeholder="User profile details..."
+                      value={profileText}
+                      onChange={(e) => setProfileText(e.target.value)}
+                   />
+                 </div>
+                 <div className="flex items-center gap-2">
+                   <button onClick={handleProfileSave} className="p-1.5 bg-green-500 rounded-full text-white hover:bg-green-600">
+                      <IconCheck className="w-4 h-4" />
+                   </button>
+                   <button onClick={() => setIsEditingProfile(false)} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
+                      <IconUndo className="w-4 h-4" />
+                   </button>
+                 </div>
                </>
             ) : (
                <>
-                 <span className="text-sm text-blue-100 flex-1 truncate">Select languages above...</span>
+                 <div className="flex items-center gap-3">
+                    <button onClick={startProfileEdit} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title="Edit Profile">
+                        <IconPencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                        onClick={onToggleTtsProvider} 
+                        className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative" 
+                        title={`TTS Provider: ${ttsProvider === 'gemini' ? 'Gemini' : 'Browser'}`}
+                    >
+                        <IconSpeaker className="w-5 h-5" />
+                        <div className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 border border-white">
+                            {ttsProvider === 'gemini' ? <IconSparkles className="w-2.5 h-2.5 text-white" /> : <IconRobot className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                    </button>
+                    <button 
+                        onClick={onToggleSttProvider} 
+                        className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative" 
+                        disabled={!isSpeechRecognitionSupported && sttProvider === 'gemini'}
+                        title={`STT Provider: ${sttProvider === 'gemini' ? 'Gemini' : 'Browser'}`}
+                    >
+                        <IconMicrophone className="w-5 h-5" />
+                        <div className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 border border-white">
+                            {sttProvider === 'gemini' ? <IconSparkles className="w-2.5 h-2.5 text-white" /> : <IconRobot className="w-2.5 h-2.5 text-white" />}
+                        </div>
+                    </button>
+                 </div>
+                 
                  <div className="flex items-center bg-blue-500/30 rounded-full p-0.5 border border-white/10">
                     <button onClick={handleSave} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title={t('startPage.saveChats')}>
                         <IconSave className="w-4 h-4" />
@@ -1378,51 +1429,6 @@ const InputArea: React.FC<InputAreaProps> = ({
                   <button onClick={onToggleImageGenerationMode} className={`p-2 cursor-pointer rounded-full transition-colors touch-manipulation ${iconButtonStyle} ${imageGenerationModeEnabled ? (isSuggestionMode ? 'text-purple-600' : 'text-purple-300 hover:text-purple-200') : ''}`} title={t('chat.bookIcon.toggleImageGen')}>
                       <IconBookOpen className="w-5 h-5" />
                   </button>
-                  <div className="relative">
-                    <button 
-                      onClick={() => setShowSettingsMenu(!showSettingsMenu)}
-                      className={`p-2 cursor-pointer rounded-full transition-colors touch-manipulation ${iconButtonStyle}`}
-                      title="Settings"
-                    >
-                      <IconCog className="w-5 h-5" />
-                    </button>
-                    {showSettingsMenu && (
-                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-white text-gray-800 rounded-lg shadow-xl border border-gray-200 p-3 z-50 text-sm">
-                        <div className="flex items-center justify-between mb-2">
-                          <span>Speech Recognition</span>
-                          <button 
-                            onClick={onToggleSttProvider}
-                            className="px-2 py-1 bg-gray-100 rounded border border-gray-300 text-xs"
-                            disabled={!isSpeechRecognitionSupported && sttProvider === 'gemini'}
-                          >
-                            {sttProvider === 'gemini' ? 'Gemini Live' : 'Browser'}
-                          </button>
-                        </div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span>Text-to-Speech</span>
-                          <button 
-                            onClick={onToggleTtsProvider}
-                            className="px-2 py-1 bg-gray-100 rounded border border-gray-300 text-xs"
-                          >
-                            {ttsProvider === 'gemini' ? 'Gemini' : 'Browser'}
-                          </button>
-                        </div>
-                        <hr className="my-2" />
-                        <button 
-                          onClick={() => {
-                            handleEditGlobalProfile();
-                            setShowSettingsMenu(false);
-                          }}
-                          className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded"
-                        >
-                          Edit User Profile
-                        </button>
-                      </div>
-                    )}
-                    {showSettingsMenu && (
-                      <div className="fixed inset-0 z-40" onClick={() => setShowSettingsMenu(false)}></div>
-                    )}
-                  </div>
                 </>
               )}
               
