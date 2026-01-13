@@ -14,7 +14,7 @@ import SttLanguageSelector from './SttLanguageSelector';
 import LanguageSelectorGlobe from './LanguageSelectorGlobe';
 import { getMaestroProfileImageDB, setMaestroProfileImageDB, clearMaestroProfileImageDB, MaestroProfileAsset } from '../../services/assets';
 import { getGlobalProfileDB, setGlobalProfileDB } from '../../services/globalProfile';
-import { uploadMediaToFiles, deleteFileByNameOrUri } from '../../../services/geminiService';
+import { uploadMediaToFiles, deleteFileByNameOrUri } from '../../services/geminiService';
 import { DB_NAME } from '../../storage/db';
 import { uniq } from '../../utils/common';
 
