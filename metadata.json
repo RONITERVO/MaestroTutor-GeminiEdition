@@ -1,6 +1,6 @@
 {
   "name": "MaestroTutor-GeminiEdition_32_checkpoint",
-  "description": "A fully client-side React application for language learning powered by Google Gemini API. Features real-time voice conversation, image-based context, and personalized tutoring without external backend dependencies.",
+  "description": "Maestro is an immersive AI language tutor powered by Google Gemini that combines real-time voice, vision, and deep memory. It understands your physical surroundings via your camera to spark natural conversations, providing audio, text, and visual responses tailored to your specific context.",
   "requestFramePermissions": [
     "camera",
     "microphone"
