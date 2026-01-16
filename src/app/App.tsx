@@ -1,4 +1,3 @@
-
 // Copyright 2025 Roni Tervo
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -41,6 +40,7 @@ import { processMediaForUpload } from '../services/mediaOptimizationService';
 import Header from '../components/Header';
 import { useSmartReengagement } from '../hooks/useSmartReengagement';
 import DebugLogPanel from '../features/debug/DebugLogPanel';
+import { pcmToWav, splitPcmBySilence } from '../utils/audioProcessing';
 
 const AUX_TEXT_MODEL_ID = 'gemini-3-flash-preview';
 
@@ -1032,13 +1032,16 @@ const App: React.FC = () => {
     let streamWasTemporarilyStarted = false;
 
     try {
-        if (currentSettings.smartReengagement.useVisualContext &&
-            visualContextStreamRef.current &&
-            visualContextStreamRef.current.active &&
-            videoElement.srcObject === visualContextStreamRef.current &&
+        // If a Live stream is active (for Gemini Live or Visual Context), reuse it
+        let activeLiveStream = liveVideoStream && liveVideoStream.active ? liveVideoStream : (
+            visualContextStreamRef.current && visualContextStreamRef.current.active ? visualContextStreamRef.current : null
+        );
+
+        if (activeLiveStream &&
+            videoElement.srcObject === activeLiveStream &&
             videoElement.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA &&
             videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
-            streamForCapture = visualContextStreamRef.current;
+            streamForCapture = activeLiveStream;
         } else {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                  errorSetter(isForReengagement ? t('error.visualContextCameraAccessNotSupported') : t('error.snapshotCameraAccessNotSupported'));
@@ -1109,13 +1112,13 @@ const App: React.FC = () => {
     } finally {
         if (streamForCapture && streamWasTemporarilyStarted) {
             streamForCapture.getTracks().forEach(track => track.stop());
-            if (videoElement.srcObject === streamForCapture && !(settingsRef.current.smartReengagement.useVisualContext && visualContextStreamRef.current === streamForCapture)) {
+            if (videoElement.srcObject === streamForCapture && !((settingsRef.current.smartReengagement.useVisualContext || liveVideoStream) && visualContextStreamRef.current === streamForCapture)) {
                 videoElement.srcObject = null;
                 videoElement.load();
             }
         }
     }
-  }, [t]); 
+  }, [t, liveVideoStream]); 
   
   const triggerReengagementSequence = useCallback(async () => {
     // cancelReengagement() implicitly via setPhase
@@ -1413,6 +1416,274 @@ const App: React.FC = () => {
     }
   }, [prepareSpeechPartsWithCache, speak, settings.tts.speakNative, selectedLanguagePair]);
 
+  const generateLiveSystemInstruction = useCallback(async (): Promise<string> => {
+    let basePrompt = currentSystemPromptText;
+    
+    // Inject History and Global Profile
+    const historySubset = computeHistorySubsetForMedia(messagesRef.current);
+    const apiHistory = deriveHistoryForApi(historySubset, {
+        maxMessages: 10,
+        contextSummary: resolveBookmarkContextSummary() || undefined,
+        globalProfileText: (await getGlobalProfileDB())?.text || undefined
+    });
+
+    let historyContext = "";
+    apiHistory.forEach((h: any) => {
+        const text = h.rawAssistantResponse || h.text || "(image)";
+        const role = h.role === 'user' ? 'User' : 'Maestro';
+        historyContext += `${role}: ${text}\n`;
+    });
+
+    if (historyContext) {
+        basePrompt += `\n\n--- CURRENT CONVERSATION CONTEXT (History) ---\n${historyContext}\n--- END CONTEXT ---`;
+    }
+
+    return basePrompt;
+  }, [currentSystemPromptText, resolveBookmarkContextSummary, computeHistorySubsetForMedia]);
+
+  const handleLiveTurnComplete = useCallback(async (userText: string, modelText: string, userAudioPcm?: Int16Array, modelAudioPcm?: Int16Array) => {
+    let userMessageId = '';
+    
+    // 1. Add User Message with Snapshot & Audio
+    if (userText) {
+        let snapshotData: any = null;
+        try {
+            // Capture snapshot of the user when they finished speaking
+            snapshotData = await captureSnapshot(false);
+        } catch { /* ignore */ }
+
+        // Save User Audio if available
+        let recordedUtterance: RecordedUtterance | undefined = undefined;
+        if (userAudioPcm && userAudioPcm.length > 0) {
+            const wavBase64 = pcmToWav(userAudioPcm, 16000);
+            recordedUtterance = {
+                dataUrl: wavBase64,
+                provider: 'gemini', // Using Gemini Live worklet capture
+                langCode: settingsRef.current.stt.language,
+                transcript: userText
+            };
+        }
+
+        userMessageId = addMessage({
+            role: 'user',
+            text: userText,
+            imageUrl: snapshotData?.base64,
+            imageMimeType: snapshotData?.mimeType,
+            llmImageUrl: snapshotData?.llmBase64,
+            llmImageMimeType: snapshotData?.llmMimeType,
+            recordedUtterance
+        });
+
+        // Background optimization and upload for live snapshots
+        if (snapshotData && userMessageId) {
+             (async () => {
+                let optimizedDataUrl = snapshotData.llmBase64;
+                let optimizedMime = snapshotData.llmMimeType;
+                
+                try {
+                    // 1. Optimize for local persistence (low-res)
+                    const optimized = await processMediaForUpload(snapshotData.base64, snapshotData.mimeType, { t });
+                    optimizedDataUrl = optimized.dataUrl;
+                    optimizedMime = optimized.mimeType;
+                } catch (e) {
+                    console.warn('Optimization failed, using original for persistence', e);
+                }
+
+                try {
+                    // 2. Upload FULL resolution to Files API for model context
+                    const up = await uploadMediaToFiles(snapshotData.base64, snapshotData.mimeType, 'live-user-snapshot');
+                    
+                    // 3. Update message with both low-res (local) and URI (remote)
+                    updateMessage(userMessageId, {
+                        llmImageUrl: optimizedDataUrl,
+                        llmImageMimeType: optimizedMime,
+                        llmFileUri: up.uri,
+                        llmFileMimeType: up.mimeType
+                    });
+                } catch (e) {
+                    console.warn('Upload failed', e);
+                    // Still update persistence image
+                    updateMessage(userMessageId, {
+                        llmImageUrl: optimizedDataUrl,
+                        llmImageMimeType: optimizedMime
+                    });
+                }
+            })();
+        }
+    }
+
+    // 2. Add Model Message
+    if (modelText) {
+        const assistantId = addMessage({
+            role: 'assistant',
+            text: modelText,
+            rawAssistantResponse: modelText
+        });
+
+        // 3. Process Model Audio (Splitting for Translations)
+        if (modelAudioPcm && modelAudioPcm.length > 0 && selectedLanguagePairRef.current) {
+            const targetLang = getPrimaryCode(selectedLanguagePairRef.current.targetLanguageCode);
+            const nativeLang = getPrimaryCode(selectedLanguagePairRef.current.nativeLanguageCode);
+            const provider = 'gemini';
+
+            // Split audio by silence gaps > 400ms (tuned for Gemini Live typical pauses)
+            const chunks = splitPcmBySilence(modelAudioPcm, 24000, 400);
+            
+            // Map chunks: Even indices -> Target, Odd indices -> Native
+            chunks.forEach((chunk, index) => {
+                const isTarget = index % 2 === 0;
+                const langCode = isTarget ? targetLang : nativeLang;
+                const wavBase64 = pcmToWav(chunk, 24000);
+                
+                // Construct a cache key. Since we don't have the exact text for each chunk yet (before parsing),
+                // we rely on the upcoming transcript formatting to map text lines to these cache entries.
+                // However, to store them *now*, we need keys. 
+                // Strategy: We will wait for the structured transcript to generate keys.
+                // BUT, to persist audio immediately, we can use a temporary approach or store raw chunks.
+                // BETTER STRATEGY: Store the audio chunks, then once text is parsed, associate them.
+                // Or: Just store them by index/lang now? 
+                
+                // Since `fetchAndSetReplySuggestions` uses the *full* message text, having audio cached per line is ideal.
+                // We will defer key generation until transcript formatting is done below.
+            });
+        }
+
+        // 4. Post-processing: Formatting Transcript & Translations
+        if (selectedLanguagePairRef.current) {
+            // The live transcript is already formatted correctly by the system instruction in Live API
+            const structuredText = modelText;
+            const translations = parseGeminiResponse(structuredText);
+            
+            // Now apply audio caching if we have chunks
+            if (modelAudioPcm && modelAudioPcm.length > 0) {
+                const targetLang = getPrimaryCode(selectedLanguagePairRef.current.targetLanguageCode);
+                const nativeLang = getPrimaryCode(selectedLanguagePairRef.current.nativeLanguageCode);
+                const chunks = splitPcmBySilence(modelAudioPcm, 24000, 400);
+                
+                let flatIndex = 0;
+                translations.forEach((pair) => {
+                    // Target Line
+                    if (pair.spanish && flatIndex < chunks.length) {
+                        const key = computeTtsCacheKey(pair.spanish, targetLang, 'gemini');
+                        upsertMessageTtsCache(assistantId, {
+                            key,
+                            langCode: targetLang,
+                            provider: 'gemini',
+                            audioDataUrl: pcmToWav(chunks[flatIndex], 24000),
+                            updatedAt: Date.now()
+                        });
+                        flatIndex++;
+                    }
+                    // Native Line
+                    if (pair.english && flatIndex < chunks.length) {
+                        const key = computeTtsCacheKey(pair.english, nativeLang, 'gemini');
+                        upsertMessageTtsCache(assistantId, {
+                            key,
+                            langCode: nativeLang,
+                            provider: 'gemini',
+                            audioDataUrl: pcmToWav(chunks[flatIndex], 24000),
+                            updatedAt: Date.now()
+                        });
+                        flatIndex++;
+                    }
+                });
+            }
+
+            updateMessage(assistantId, {
+                rawAssistantResponse: structuredText,
+                translations: translations
+            });
+
+            // 5. Generate Suggestions Immediately
+            // Construct complete history for suggestions context including the new messages
+            const completeHistory = [...messagesRef.current];
+            if (userMessageId) {
+               completeHistory.push({
+                   id: userMessageId,
+                   role: 'user',
+                   text: userText,
+                   timestamp: Date.now()
+               } as ChatMessage);
+            }
+            completeHistory.push({
+                id: assistantId,
+                role: 'assistant',
+                rawAssistantResponse: structuredText,
+                translations: translations,
+                timestamp: Date.now()
+            } as ChatMessage);
+
+            fetchAndSetReplySuggestions(assistantId, structuredText, getHistoryRespectingBookmark(completeHistory));
+            lastFetchedSuggestionsForRef.current = assistantId;
+        }
+
+        // 6. Background Image Generation (Full Context)
+        if (settingsRef.current.imageGenerationModeEnabled) {
+            const assistantStartTime = Date.now();
+            updateMessage(assistantId, {
+                isGeneratingImage: true,
+                imageGenerationStartTime: assistantStartTime
+            });
+
+            // Use FULL history context logic
+            const historySubsetForImg = computeHistorySubsetForMedia(messagesRef.current);
+            let gpText: string | undefined = undefined;
+            try { gpText = (await getGlobalProfileDB())?.text || undefined; } catch {}
+
+            const apiHistory = deriveHistoryForApi(historySubsetForImg, {
+                maxMessages: computeMaxMessagesForArray(getHistoryRespectingBookmark(messagesRef.current)),
+                maxMediaToKeep: MAX_MEDIA_TO_KEEP,
+                contextSummary: resolveBookmarkContextSummary() || undefined,
+                globalProfileText: gpText,
+                // Do NOT pass placeholderLatestUserMessage here, we append manually below to ensure order
+            });
+            
+            // Add current turn if not in history subset yet
+            if (userText && !apiHistory.some(h => h.role === 'user' && h.text === userText)) {
+                apiHistory.push({ role: 'user', text: userText });
+            }
+            // Dont add assistant response context it is added below as part of the refined prompt.
+            // apiHistory.push({ role: 'assistant', text: modelText }); 
+            // Append camera instructions as the final User message, matching standard flow context
+            apiHistory.push({ role: 'user', text: DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE });
+
+            // Construct prompt asking for "Next Image" based on this context
+            const prompt = IMAGE_GEN_USER_PROMPT_TEMPLATE.replace("{TEXT}", modelText);
+            
+            const sanitizedHistory = await sanitizeHistoryWithVerifiedUris(apiHistory as any);
+
+            generateImage({
+                history: sanitizedHistory,
+                latestMessageText: prompt,
+                latestMessageRole: 'user',
+                systemInstruction: IMAGE_GEN_SYSTEM_INSTRUCTION,
+                maestroAvatarUri: maestroAvatarUriRef.current || undefined,
+                maestroAvatarMimeType: maestroAvatarMimeTypeRef.current || undefined,
+            }).then(async (res: any) => {
+                if (res.base64Image) {
+                    const optimized = await processMediaForUpload(res.base64Image, res.mimeType, { t });
+                    const up = await uploadMediaToFiles(res.base64Image, res.mimeType, 'live-gen');
+                    
+                    updateMessage(assistantId, {
+                        imageUrl: res.base64Image,
+                        imageMimeType: res.mimeType,
+                        llmImageUrl: optimized.dataUrl,
+                        llmImageMimeType: optimized.mimeType,
+                        llmFileUri: up.uri,
+                        llmFileMimeType: up.mimeType,
+                        isGeneratingImage: false,
+                        imageGenerationStartTime: undefined
+                    });
+                } else {
+                    updateMessage(assistantId, { isGeneratingImage: false });
+                }
+            }).catch(() => {
+                updateMessage(assistantId, { isGeneratingImage: false });
+            });
+        }
+    }
+  }, [addMessage, captureSnapshot, t, parseGeminiResponse, fetchAndSetReplySuggestions, getHistoryRespectingBookmark, computeHistorySubsetForMedia, resolveBookmarkContextSummary, upsertMessageTtsCache, computeMaxMessagesForArray]);
+
   const { start: startLiveConversation, stop: stopLiveConversation } = useGeminiLiveConversation({
     onStateChange: (state) => {
       setLiveSessionState(state);
@@ -1442,6 +1713,7 @@ const App: React.FC = () => {
       setLiveSessionError(message);
       restoreSttAfterLiveSession();
     },
+    onTurnComplete: handleLiveTurnComplete
   });
 
   const handleStartLiveSession = useCallback(async () => {
@@ -1504,10 +1776,13 @@ const App: React.FC = () => {
       handleUserInputActivity();
       cancelReengagement();
 
+      // Build context-rich system instruction
+      const liveSystemInstruction = await generateLiveSystemInstruction();
+
       await startLiveConversation({
         stream,
         videoElement: visualContextVideoRef.current,
-        systemInstruction: currentSystemPromptText || undefined,
+        systemInstruction: liveSystemInstruction,
       });
     } catch (error) {
       releaseLiveSessionCapture();
@@ -1516,7 +1791,7 @@ const App: React.FC = () => {
       setLiveSessionError(message);
       throw error;
     }
-  }, [cancelReengagement, clearTranscript, currentSystemPromptText, handleUserInputActivity, isListening, liveSessionState, liveVideoStream, releaseLiveSessionCapture, restoreSttAfterLiveSession, setLiveSessionError, setLiveVideoStream, setSettings, startLiveConversation, stopListening, t]);
+  }, [cancelReengagement, clearTranscript, generateLiveSystemInstruction, handleUserInputActivity, isListening, liveSessionState, liveVideoStream, releaseLiveSessionCapture, restoreSttAfterLiveSession, setLiveSessionError, setLiveVideoStream, setSettings, startLiveConversation, stopListening, t]);
 
   const handleStopLiveSession = useCallback(async () => {
     try {
@@ -1836,7 +2111,7 @@ const App: React.FC = () => {
       } catch {}
 
       const derivedHistory = deriveHistoryForApi(historySubsetForSendFinal, {
-        maxMessages: computeMaxMessagesForArray(historySubsetForSendFinal.filter(m => m.role === 'user' || m.role === 'assistant')),
+        maxMessages: computeMaxMessagesForArray(historySubsetForSendFinal.filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant')),
         maxMediaToKeep: MAX_MEDIA_TO_KEEP,
         contextSummary: resolveBookmarkContextSummary() || undefined,
         globalProfileText,
@@ -2014,7 +2289,7 @@ const App: React.FC = () => {
                 } catch {}
 
                 const assistantHistory = deriveHistoryForApi(histForAssistantImgBase, {
-                  maxMessages: computeMaxMessagesForArray(getHistoryRespectingBookmark(messagesRef.current as any).filter(m => m.role === 'user' || m.role === 'assistant')),
+                  maxMessages: computeMaxMessagesForArray(getHistoryRespectingBookmark(messagesRef.current as any).filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant')),
                   maxMediaToKeep: MAX_MEDIA_TO_KEEP,
                   contextSummary: resolveBookmarkContextSummary() || undefined,
                   globalProfileText: gpTextForAssistant,

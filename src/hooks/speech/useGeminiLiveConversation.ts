@@ -1,12 +1,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob } from '@google/genai';
+import { mergeInt16Arrays, trimSilence } from '../../utils/audioProcessing';
 
 export type LiveSessionState = 'idle' | 'connecting' | 'active' | 'error';
 
 export interface UseGeminiLiveConversationCallbacks {
   onStateChange?: (state: LiveSessionState) => void;
   onError?: (message: string) => void;
+  onTurnComplete?: (userText: string, modelText: string, userAudioPcm?: Int16Array, modelAudioPcm?: Int16Array) => void;
 }
 
 const CAPTURE_WORKLET_NAME = 'gemini-live-mic-capture';
@@ -38,6 +40,11 @@ function base64ToUint8(base64: string): Uint8Array {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes;
+}
+
+function base64ToInt16(base64: string): Int16Array {
+    const bytes = base64ToUint8(base64);
+    return new Int16Array(bytes.buffer);
 }
 
 async function decodePcm16ToAudioBuffer(
@@ -87,6 +94,12 @@ export function useGeminiLiveConversation(
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const audioWorkletRegisteredContextsRef = useRef<WeakSet<AudioContext>>(new WeakSet());
 
+  // Transcription & Audio Accumulators
+  const currentInputTranscriptionRef = useRef<string>('');
+  const currentOutputTranscriptionRef = useRef<string>('');
+  const currentUserAudioChunksRef = useRef<Int16Array[]>([]);
+  const currentModelAudioChunksRef = useRef<Int16Array[]>([]);
+
   const callbacksRef = useRef(callbacks);
   useEffect(() => { callbacksRef.current = callbacks; }, [callbacks]);
 
@@ -116,23 +129,34 @@ export function useGeminiLiveConversation(
       microphoneStreamRef.current.getTracks().forEach(t => t.stop());
       microphoneStreamRef.current = null;
     }
+    
+    // Safely close input context
     if (inputAudioContextRef.current) {
-      try { await inputAudioContextRef.current.close(); } catch { }
+      const ctx = inputAudioContextRef.current;
       inputAudioContextRef.current = null;
+      if (ctx.state !== 'closed') {
+          try { await ctx.close(); } catch { }
+      }
     }
+    
+    // Safely close output context
     if (outputAudioContextRef.current) {
       stopAllAudio();
-      try { await outputAudioContextRef.current.close(); } catch { }
+      const ctx = outputAudioContextRef.current;
       outputAudioContextRef.current = null;
+      if (ctx.state !== 'closed') {
+          try { await ctx.close(); } catch { }
+      }
     }
     
     if (captureVideoRef.current) {
         try {
-            captureVideoRef.current.pause();
-            captureVideoRef.current.srcObject = null;
-            if (captureVideoRef.current.parentElement === document.body) {
+            // Only fully detach if we created this hidden element
+            if (captureVideoRef.current.parentElement === document.body && captureVideoRef.current.style.position === 'fixed') {
+                captureVideoRef.current.pause();
+                captureVideoRef.current.srcObject = null;
                 document.body.removeChild(captureVideoRef.current);
-            }
+            } 
         } catch { }
         captureVideoRef.current = null;
     }
@@ -142,6 +166,10 @@ export function useGeminiLiveConversation(
         try { if (typeof sessionRef.current.close === 'function') sessionRef.current.close(); } catch {}
         sessionRef.current = null;
     }
+    currentInputTranscriptionRef.current = '';
+    currentOutputTranscriptionRef.current = '';
+    currentUserAudioChunksRef.current = [];
+    currentModelAudioChunksRef.current = [];
   }, [stopAllAudio]);
 
   const ensureCaptureWorklet = useCallback(async (ctx: AudioContext) => {
@@ -150,7 +178,27 @@ export function useGeminiLiveConversation(
     }
     const registry = audioWorkletRegisteredContextsRef.current;
     if (registry.has(ctx)) return;
-    const source = `class GeminiLiveMicCaptureProcessor extends AudioWorkletProcessor {\n  process(inputs){\n    const input = inputs[0];\n    if (input && input[0] && input[0].length){\n      this.port.postMessage(input[0].slice());\n    }\n    return true;\n  }\n}\nregisterProcessor('${CAPTURE_WORKLET_NAME}', GeminiLiveMicCaptureProcessor);`;
+    
+    // Perform float->int16 conversion in the worklet to avoid main thread processing overhead
+    const source = `class GeminiLiveMicCaptureProcessor extends AudioWorkletProcessor {
+      process(inputs) {
+        const input = inputs[0];
+        const channel = input[0];
+        if (channel && channel.length > 0) {
+          const len = channel.length;
+          const int16 = new Int16Array(len);
+          for (let i = 0; i < len; i++) {
+            let s = channel[i];
+            s = s < -1 ? -1 : s > 1 ? 1 : s;
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+          this.port.postMessage(int16, [int16.buffer]);
+        }
+        return true;
+      }
+    }
+    registerProcessor('${CAPTURE_WORKLET_NAME}', GeminiLiveMicCaptureProcessor);`;
+
     const blob = new Blob([source], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     try {
@@ -191,6 +239,8 @@ export function useGeminiLiveConversation(
   const start = useCallback(async (opts: { systemInstruction?: string, stream?: MediaStream, videoElement?: HTMLVideoElement | null }) => {
     const { stream, videoElement, systemInstruction } = opts;
     updateState('connecting');
+    
+    // Ensure previous session is fully cleaned
     await cleanup();
 
     try {
@@ -203,10 +253,14 @@ export function useGeminiLiveConversation(
 
       // Audio Setup
       const AudioContextCtor: typeof AudioContext = (window.AudioContext || (window as any).webkitAudioContext);
+      
       const inputCtx = new AudioContextCtor({ sampleRate: INPUT_SAMPLE_RATE });
       inputAudioContextRef.current = inputCtx;
+      
+      // Use a new dedicated stream for audio to avoid conflicts
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       microphoneStreamRef.current = micStream;
+      
       const source = inputCtx.createMediaStreamSource(micStream);
       await ensureCaptureWorklet(inputCtx);
       const workletNode = new AudioWorkletNode(inputCtx, CAPTURE_WORKLET_NAME, { numberOfInputs: 1, numberOfOutputs: 0 });
@@ -221,15 +275,23 @@ export function useGeminiLiveConversation(
         config: {
           responseModalities: [Modality.AUDIO],
           systemInstruction: systemInstruction,
+          // Empty config objects to enable transcription without specifying parameters causing invalid argument errors
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
         callbacks: {
           onopen: () => {
             updateState('active');
           },
           onmessage: async (msg: LiveServerMessage) => {
+             // 1. Handle Audio Output
              const inlineAudio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
              if (inlineAudio && outputAudioContextRef.current) {
                  try {
+                    // Accumulate raw PCM16 for turn handling
+                    const pcm16 = base64ToInt16(inlineAudio);
+                    currentModelAudioChunksRef.current.push(pcm16);
+
                     const ctx = outputAudioContextRef.current;
                     const buffer = await decodePcm16ToAudioBuffer(base64ToUint8(inlineAudio), ctx, OUTPUT_SAMPLE_RATE, 1);
                     const source = ctx.createBufferSource();
@@ -244,8 +306,45 @@ export function useGeminiLiveConversation(
                      console.warn('Audio decode failed', e);
                  }
              }
+
+             // 2. Handle Transcript Accumulation
+             if (msg.serverContent?.inputTranscription?.text) {
+               currentInputTranscriptionRef.current += msg.serverContent.inputTranscription.text;
+             }
+             if (msg.serverContent?.outputTranscription?.text) {
+               currentOutputTranscriptionRef.current += msg.serverContent.outputTranscription.text;
+             }
+
+             // 3. Handle Turn Completion (Exchange Finished)
+             if (msg.serverContent?.turnComplete) {
+                const userText = currentInputTranscriptionRef.current.trim();
+                const modelText = currentOutputTranscriptionRef.current.trim();
+                
+                // Consolidate Audio
+                let userAudioFull = mergeInt16Arrays(currentUserAudioChunksRef.current);
+                
+                // Trim silence from user audio to avoid saving dead air
+                if (userAudioFull.length > 0) {
+                    userAudioFull = trimSilence(userAudioFull, INPUT_SAMPLE_RATE);
+                }
+
+                const modelAudioFull = mergeInt16Arrays(currentModelAudioChunksRef.current);
+
+                if (userText || modelText) {
+                    callbacksRef.current.onTurnComplete?.(userText, modelText, userAudioFull, modelAudioFull);
+                }
+                // Reset accumulators for next turn
+                currentInputTranscriptionRef.current = '';
+                currentOutputTranscriptionRef.current = '';
+                currentUserAudioChunksRef.current = [];
+                currentModelAudioChunksRef.current = [];
+             }
+
+             // 4. Handle Interruption
              if (msg.serverContent?.interrupted) {
                  stopAllAudio();
+                 currentOutputTranscriptionRef.current = ''; 
+                 currentModelAudioChunksRef.current = [];
              }
           },
           onclose: () => {
@@ -253,9 +352,21 @@ export function useGeminiLiveConversation(
             updateState('idle');
             cleanup();
           },
-          onerror: (err) => {
+          onerror: (err: any) => {
             updateState('error');
-            callbacksRef.current.onError?.(String(err));
+            let message = "Connection error";
+            try {
+                if (err instanceof Error) message = err.message;
+                else if (typeof err === 'string') message = err;
+                else if (err && typeof err === 'object') {
+                    if (err.type === 'error' && !err.message) message = "Connection Failed: Network or API Error";
+                    else if (err.message) message = String(err.message);
+                    else message = JSON.stringify(err);
+                }
+            } catch {
+                message = "Unknown Connection Error";
+            }
+            callbacksRef.current.onError?.(message);
             cleanup();
           }
         }
@@ -264,14 +375,13 @@ export function useGeminiLiveConversation(
       sessionRef.current = session;
 
       // Audio Streaming Loop (Worklet)
-      workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
-          const floatData = event.data;
-          if (!(floatData instanceof Float32Array) || !floatData.length) return;
-          const pcm = new Int16Array(floatData.length);
-          for(let i=0; i<floatData.length; i++) {
-              let s = Math.max(-1, Math.min(1, floatData[i]));
-              pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-          }
+      workletNode.port.onmessage = (event: MessageEvent<Int16Array>) => {
+          const pcm = event.data;
+          if (!(pcm instanceof Int16Array) || !pcm.length) return;
+          
+          // Accumulate User Audio for history saving
+          currentUserAudioChunksRef.current.push(pcm.slice()); // Slice to copy for accumulation
+          
           try {
               sessionRef.current?.sendRealtimeInput({ media: encodeInt16ToBlob(pcm) });
           } catch {}
@@ -303,7 +413,7 @@ export function useGeminiLiveConversation(
     } catch (e) {
       updateState('error');
       callbacksRef.current.onError?.(e instanceof Error ? e.message : String(e));
-      cleanup();
+      await cleanup();
     }
   }, [updateState, cleanup, stopAllAudio, ensureCaptureWorklet, ensureVideoElementReady]);
 

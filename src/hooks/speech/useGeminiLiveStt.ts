@@ -1,6 +1,7 @@
 
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob } from '@google/genai';
+import { mergeInt16Arrays, trimSilence } from '../../utils/audioProcessing';
 
 export interface UseGeminiLiveSttReturn {
   start: (language?: string) => Promise<void>;
@@ -8,6 +9,7 @@ export interface UseGeminiLiveSttReturn {
   transcript: string;
   isListening: boolean;
   error: string | null;
+  getRecordedAudio: () => Int16Array | null;
 }
 
 const STT_WORKLET_NAME = 'gemini-stt-processor';
@@ -22,22 +24,6 @@ function toBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-// Convert Float32 audio data to Int16 PCM Blob for Gemini
-function encodeAudioChunkToBlob(float32Data: Float32Array): GenAIBlob {
-  const l = float32Data.length;
-  const int16 = new Int16Array(l);
-  for (let i = 0; i < l; i++) {
-    // Clamp and convert to 16-bit PCM
-    let s = Math.max(-1, Math.min(1, float32Data[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  const bytes = new Uint8Array(int16.buffer);
-  return {
-    data: toBase64(bytes),
-    mimeType: 'audio/pcm;rate=16000',
-  };
-}
-
 export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
   const [transcript, setTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -47,10 +33,25 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const accumulatedTranscriptRef = useRef('');
+  const audioChunksRef = useRef<Int16Array[]>([]);
+  
+  // Transcription State Refs
+  const committedTranscriptRef = useRef('');
+  const interimInputRef = useRef('');
+  const interimParrotRef = useRef('');
   
   // Track registered contexts to prevent re-registering the worklet module
   const registeredContextsRef = useRef<WeakSet<AudioContext>>(new WeakSet());
+
+  const getRecordedAudio = useCallback(() => {
+    if (audioChunksRef.current.length === 0) return null;
+    let full = mergeInt16Arrays(audioChunksRef.current);
+    if (full.length > 0) {
+        full = trimSilence(full, 16000);
+    }
+    audioChunksRef.current = [];
+    return full;
+  }, []);
 
   const cleanup = useCallback(async () => {
     if (workletNodeRef.current) {
@@ -78,27 +79,40 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
     setIsListening(false);
   }, [cleanup]);
 
+  const updateTranscriptState = useCallback(() => {
+    const committed = committedTranscriptRef.current;
+    // Prefer parrot if available (it's the corrected version), otherwise show input ASR
+    const currentSegment = interimParrotRef.current.trim() || interimInputRef.current.trim();
+    const separator = (committed && currentSegment) ? ' ' : '';
+    setTranscript(committed + separator + currentSegment);
+  }, []);
+
   // Ensure the AudioWorklet is loaded
   const ensureSttWorklet = useCallback(async (ctx: AudioContext) => {
     if (!ctx.audioWorklet) throw new Error("AudioWorklet not supported");
     if (registeredContextsRef.current.has(ctx)) return;
 
-    const blob = new Blob(
-      [
-        `class GeminiSttProcessor extends AudioWorkletProcessor {
-          process(inputs) {
-            const input = inputs[0];
-            if (input && input[0] && input[0].length > 0) {
-              this.port.postMessage(input[0]);
-            }
-            return true;
+    // Perform float->int16 conversion in the worklet to avoid main thread processing overhead
+    const source = `class GeminiSttProcessor extends AudioWorkletProcessor {
+      process(inputs) {
+        const input = inputs[0];
+        const channel = input[0];
+        if (channel && channel.length > 0) {
+          const len = channel.length;
+          const int16 = new Int16Array(len);
+          for (let i = 0; i < len; i++) {
+            let s = channel[i];
+            s = s < -1 ? -1 : s > 1 ? 1 : s;
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
           }
+          this.port.postMessage(int16, [int16.buffer]);
         }
-        registerProcessor("${STT_WORKLET_NAME}", GeminiSttProcessor);`
-      ],
-      { type: "application/javascript" }
-    );
-    
+        return true;
+      }
+    }
+    registerProcessor("${STT_WORKLET_NAME}", GeminiSttProcessor);`;
+
+    const blob = new Blob([source], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
     try {
       await ctx.audioWorklet.addModule(url);
@@ -112,7 +126,11 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
     await cleanup();
     setError(null);
     setTranscript('');
-    accumulatedTranscriptRef.current = '';
+    
+    committedTranscriptRef.current = '';
+    interimInputRef.current = '';
+    interimParrotRef.current = '';
+    audioChunksRef.current = [];
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -121,21 +139,45 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
         config: {
           responseModalities: [Modality.AUDIO], // Required by API even if we only care about transcription
           inputAudioTranscription: {}, // Enable Input Transcription
+          outputAudioTranscription: {}, // Enable Output Transcription (The Parrot)
+          systemInstruction: "You are a precise phonetic transcriber. Your task is to repeat exactly what the user says, word for word. Do not reply, do not answer questions, do not summarize. Just repeat the user's speech.",
         },
         callbacks: {
           onopen: () => {
             setIsListening(true);
           },
           onmessage: (msg: LiveServerMessage) => {
+            // 1. Capture User Input (ASR) - Low Latency, potentially inaccurate
             if (msg.serverContent?.inputTranscription) {
               const text = msg.serverContent.inputTranscription.text;
               if (text) {
-                 accumulatedTranscriptRef.current += text;
-                 setTranscript(accumulatedTranscriptRef.current);
+                 interimInputRef.current += text;
+                 updateTranscriptState();
               }
             }
+            
+            // 2. Capture Model Output (Parrot) - High Accuracy, higher latency
+            if (msg.serverContent?.outputTranscription) {
+              const text = msg.serverContent.outputTranscription.text;
+              if (text) {
+                 interimParrotRef.current += text;
+                 updateTranscriptState();
+              }
+            }
+
+            // 3. Commit Turn
             if (msg.serverContent?.turnComplete) {
-               accumulatedTranscriptRef.current += " "; 
+               // Use the parrot if available, otherwise fallback to input
+               const finalSegment = interimParrotRef.current.trim() || interimInputRef.current.trim();
+               if (finalSegment) {
+                   const sep = committedTranscriptRef.current ? ' ' : '';
+                   committedTranscriptRef.current += sep + finalSegment;
+               }
+               
+               // Reset interim buffers for next turn
+               interimInputRef.current = '';
+               interimParrotRef.current = '';
+               updateTranscriptState();
             }
           },
           onclose: () => {
@@ -172,12 +214,19 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
       workletNodeRef.current = workletNode;
 
       // Handle audio chunks from the worklet
-      workletNode.port.onmessage = (event) => {
-        const floatData = event.data;
-        if (sessionRef.current) {
-           const blob = encodeAudioChunkToBlob(floatData);
-           // Using sendRealtimeInput is non-blocking here
-           sessionRef.current.sendRealtimeInput({ media: blob });
+      workletNode.port.onmessage = (event: MessageEvent<Int16Array>) => {
+        const pcm = event.data;
+        if (pcm && pcm.length > 0) {
+           audioChunksRef.current.push(pcm);
+
+           if (sessionRef.current) {
+               const bytes = new Uint8Array(pcm.buffer);
+               const blob = {
+                  data: toBase64(bytes),
+                  mimeType: 'audio/pcm;rate=16000',
+               };
+               sessionRef.current.sendRealtimeInput({ media: blob });
+           }
         }
       };
 
@@ -191,11 +240,11 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
       setIsListening(false);
       cleanup();
     }
-  }, [cleanup, stop, ensureSttWorklet]);
+  }, [cleanup, stop, ensureSttWorklet, updateTranscriptState]);
 
   useEffect(() => {
     return () => { cleanup(); };
   }, [cleanup]);
 
-  return { start, stop, transcript, isListening, error };
+  return { start, stop, transcript, isListening, error, getRecordedAudio };
 }

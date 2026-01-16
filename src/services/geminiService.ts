@@ -199,9 +199,6 @@ export async function generateGeminiResponse(
     if (b64) currentParts.push({ inlineData: { data: b64, mimeType: imageMimeType } });
   }
   
-  // Merge current user prompt into previous user turn if possible to avoid User-User sequence,
-  // or just push as new turn. Gemini generally tolerates User-User but merging is safer.
-  // For simplicity and clarity in this implementation, we push a new turn.
   contents.push({ role: 'user', parts: currentParts });
 
   const config: any = { ...configOverrides };
@@ -247,30 +244,22 @@ export async function generateImage(params: {
   
   const contents: any[] = [];
   
-  // Create a working copy of history to safely modify/filter
   let processedHistory = history ? history.map(h => ({...h})) : [];
 
-  // Filter out non-image media and enforce limits
   let imageCount = 0;
-  // Iterate backwards to keep most recent images and drop others
   for (let i = processedHistory.length - 1; i >= 0; i--) {
       const h = processedHistory[i];
       const mime = (h.imageMimeType || "").toLowerCase();
       const isImage = mime.startsWith('image/');
       
-      // Note: The history objects coming from deriveHistoryForApi use 'imageFileUri' 
-      // for all file types (images, video, audio). We must filter based on mime type.
       if (h.imageFileUri) {
           if (!isImage) {
-             // Drop non-image media (audio, video, pdf) as image generation model does not support them
              h.imageFileUri = undefined;
-             // Add note to context so model knows media was there
              const type = mime.split('/')[0] || "File";
              const note = ` [${type} context omitted]`;
              if (h.rawAssistantResponse) h.rawAssistantResponse += note;
              else h.text = (h.text || "") + note;
           } else {
-             // It is an image, check count limit (max 3 usually for image models)
              if (imageCount >= 3) {
                  h.imageFileUri = undefined;
                  const note = ` [Previous image context omitted]`;
@@ -290,7 +279,6 @@ export async function generateImage(params: {
         if (textContent) parts.push({ text: textContent });
         
         if (h.imageFileUri) {
-            // Final failsafe: only include image types in the payload for image generation model
             const m = (h.imageMimeType || "").toLowerCase();
             if (m.startsWith('image/')) {
                 parts.push({ fileData: { fileUri: h.imageFileUri, mimeType: h.imageMimeType || 'image/jpeg' } });
@@ -309,7 +297,6 @@ export async function generateImage(params: {
   
   if (maestroAvatarUri) {
       const m = (maestroAvatarMimeType || "").toLowerCase();
-      // Ensure avatar is also an image
       if (!m || m.startsWith('image/')) {
           currentParts.push({ fileData: { fileUri: maestroAvatarUri, mimeType: maestroAvatarMimeType || 'image/png' } });
       }
