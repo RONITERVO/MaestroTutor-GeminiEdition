@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SpeechPart, TtsProvider, SttProvider, RecordedUtterance } from '../types';
 import { useTtsEngine } from './speech/useTtsEngine';
 import { useGeminiLiveStt } from './speech/useGeminiLiveStt';
+import { pcmToWav } from '../utils/audioProcessing';
 
 interface UseBrowserSpeechProps {
   onEngineCycleEnd?: (errorOccurred: boolean) => void;
@@ -210,7 +211,22 @@ const useBrowserSpeech = (props?: UseBrowserSpeechProps): UseBrowserSpeechReturn
       setTranscript('');
   }, []);
   
-  const claimRecordedUtterance = useCallback(() => null, []);
+  const claimRecordedUtterance = useCallback(() => {
+      const provider = getSttProvider ? getSttProvider() : 'browser';
+      if (provider === 'gemini') {
+          const pcm = geminiStt.getRecordedAudio();
+          if (pcm && pcm.length > 0) {
+              const wavBase64 = pcmToWav(pcm, 16000);
+              return {
+                  dataUrl: wavBase64,
+                  provider: 'gemini',
+                  langCode: props?.getGlobalSttLanguage ? props.getGlobalSttLanguage() : 'en',
+                  transcript: transcript,
+              } as RecordedUtterance;
+          }
+      }
+      return null;
+  }, [getSttProvider, geminiStt, props, transcript]);
 
   return {
       isSpeaking, speak, stopSpeaking, isSpeechSynthesisSupported,
