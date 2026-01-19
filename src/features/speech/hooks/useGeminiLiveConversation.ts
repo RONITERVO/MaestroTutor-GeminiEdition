@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob } from '@google/genai';
 import { mergeInt16Arrays, trimSilence } from '../utils/audioProcessing';
@@ -77,10 +76,21 @@ const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reje
   reader.readAsDataURL(blob);
 });
 
+/**
+ * Manage a live Gemini conversation with real-time microphone capture, periodic video frames, model audio playback, transcription accumulation, and turn-level callbacks.
+ *
+ * @param callbacks - Optional handlers:
+ *   - onStateChange(state): invoked when the session state changes ('idle' | 'connecting' | 'active' | 'error')
+ *   - onError(message): invoked with an error message when the session encounters an error
+ *   - onTurnComplete(userText, modelText, userAudioPcm?, modelAudioPcm?): invoked when an exchange completes with consolidated transcripts and optional Int16Array PCM audio for user and model
+ * @returns An object with:
+ *   - start(opts): begins a live session using the provided media stream and optional `systemInstruction` and `videoElement`
+ *   - stop(): stops the session and releases all audio/video resources and internal state
+ */
 export function useGeminiLiveConversation(
   callbacks: UseGeminiLiveConversationCallbacks = {}
 ) {
-  const [state, setState] = useState<LiveSessionState>('idle');
+  const [_state, setState] = useState<LiveSessionState>('idle');
   
   const sessionRef = useRef<any>(null);
   const frameIntervalRef = useRef<number | null>(null);
@@ -247,7 +257,7 @@ export function useGeminiLiveConversation(
       if (!stream || !stream.active) throw new Error('No active stream provided');
 
       // Video Setup
-      const video = await ensureVideoElementReady(stream, videoElement);
+      await ensureVideoElementReady(stream, videoElement);
       const canvas = document.createElement('canvas');
       canvasRef.current = canvas;
 
