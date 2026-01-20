@@ -6,10 +6,32 @@
  * 
  * These hooks extract and organize the logic previously contained in App.tsx,
  * following the "Lift, Split, and Colocate" pattern for better maintainability.
+ * 
+ * NEW: Zustand store is now the single source of truth for shared state.
+ * Hooks here serve as bridges during transition. Eventually, components
+ * should import directly from the store.
  */
+
+// Zustand Store (single source of truth)
+export { 
+  useMaestroStore, 
+  getStoreState, 
+  subscribeToStore,
+  type MaestroStore 
+} from '../../store';
 
 // Translation
 export { useTranslations, type TranslationFunction } from './useTranslations';
+
+// App Lifecycle
+export { useAppLifecycle } from './useAppLifecycle';
+export { useAppAssets } from './useAppAssets';
+export { useMaestroActivityStage } from './useMaestroActivityStage';
+export { useAutoSendOnSilence } from './useAutoSendOnSilence';
+export { useAutoFetchSuggestions } from './useAutoFetchSuggestions';
+export { useSuggestionModeAutoRestart } from './useSuggestionModeAutoRestart';
+export { useIdleReengagement } from './useIdleReengagement';
+export { useLanguageSelectionController } from './useLanguageSelectionController';
 
 // Settings Management
 export { 

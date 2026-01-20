@@ -1,11 +1,19 @@
 // Copyright 2025 Roni Tervo
 //
 // SPDX-License-Identifier: Apache-2.0
+/**
+ * useHardware - Hook for managing hardware access (camera, microphone).
+ * 
+ * Handles device enumeration, stream management, and snapshot capture.
+ * Syncs key state to Zustand store for cross-component access.
+ */
+
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { CameraDevice } from '../../core/types';
 import type { TranslationFunction } from './useTranslations';
 import { IMAGE_GEN_CAMERA_ID } from '../../core/config/app';
-import { getFacingModeFromLabel } from '../../features/vision/utils/mediaUtils';
+import { getFacingModeFromLabel } from '../../features/vision';
+import { useMaestroStore } from '../../store';
 
 export interface UseHardwareConfig {
   t: TranslationFunction;
@@ -61,6 +69,13 @@ export interface UseHardwareReturn {
 export const useHardware = (config: UseHardwareConfig): UseHardwareReturn => {
   const { t, sendWithSnapshotEnabled, useVisualContext, selectedCameraId, settingsRef } = config;
 
+  // Get store actions for syncing state
+  const setStoreAvailableCameras = useMaestroStore(state => state.setAvailableCameras);
+  const setStoreCurrentCameraFacingMode = useMaestroStore(state => state.setCurrentCameraFacingMode);
+  const setStoreLiveVideoStream = useMaestroStore(state => state.setLiveVideoStream);
+  const setStoreVisualContextCameraError = useMaestroStore(state => state.setVisualContextCameraError);
+  const setStoreSnapshotUserError = useMaestroStore(state => state.setSnapshotUserError);
+
   const visualContextVideoRef = useRef<HTMLVideoElement>(null);
   const visualContextStreamRef = useRef<MediaStream | null>(null);
   const availableCamerasRef = useRef<CameraDevice[]>([]);
@@ -71,8 +86,27 @@ export const useHardware = (config: UseHardwareConfig): UseHardwareReturn => {
   const [visualContextCameraError, setVisualContextCameraError] = useState<string | null>(null);
   const [snapshotUserError, setSnapshotUserError] = useState<string | null>(null);
 
-  // Sync ref
-  useEffect(() => { availableCamerasRef.current = availableCameras; }, [availableCameras]);
+  // Sync local state to store
+  useEffect(() => { 
+    availableCamerasRef.current = availableCameras; 
+    setStoreAvailableCameras(availableCameras);
+  }, [availableCameras, setStoreAvailableCameras]);
+
+  useEffect(() => {
+    setStoreCurrentCameraFacingMode(currentCameraFacingMode);
+  }, [currentCameraFacingMode, setStoreCurrentCameraFacingMode]);
+
+  useEffect(() => {
+    setStoreLiveVideoStream(liveVideoStream);
+  }, [liveVideoStream, setStoreLiveVideoStream]);
+
+  useEffect(() => {
+    setStoreVisualContextCameraError(visualContextCameraError);
+  }, [visualContextCameraError, setStoreVisualContextCameraError]);
+
+  useEffect(() => {
+    setStoreSnapshotUserError(snapshotUserError);
+  }, [snapshotUserError, setStoreSnapshotUserError]);
 
   // Update facing mode when camera selection changes
   useEffect(() => {

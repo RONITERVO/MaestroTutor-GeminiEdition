@@ -12,7 +12,7 @@
  * - Translation and parsing of responses
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import { 
   ChatMessage, 
   ReplySuggestion, 
@@ -31,10 +31,9 @@ import {
   uploadMediaToFiles, 
   checkFileStatuses 
 } from '../../api/gemini';
-import { getGlobalProfileDB, setGlobalProfileDB } from '../../features/session/services/globalProfile';
-import { safeSaveChatHistoryDB, deriveHistoryForApi } from '../../features/chat/services/chatHistory';
-import { setAppSettingsDB } from '../../features/session/services/settings';
-import { processMediaForUpload } from '../../features/vision/services/mediaOptimizationService';
+import { getGlobalProfileDB, setGlobalProfileDB, setAppSettingsDB } from '../../features/session';
+import { safeSaveChatHistoryDB, deriveHistoryForApi, INLINE_CAP_AUDIO } from '../../features/chat';
+import { processMediaForUpload, createKeyframeFromVideoDataUrl } from '../../features/vision';
 import { 
   DEFAULT_TEXT_MODEL_ID, 
   IMAGE_GEN_CAMERA_ID,
@@ -47,10 +46,10 @@ import {
   composeMaestroSystemInstruction 
 } from '../../core/config/prompts';
 import { isRealChatMessage } from '../../shared/utils/common';
-import { INLINE_CAP_AUDIO } from '../../features/chat/utils/persistence';
 import { getShortLangCodeForPrompt } from '../../shared/utils/languageUtils';
-import { createKeyframeFromVideoDataUrl } from '../../features/vision/utils/mediaUtils';
 import type { TranslationFunction } from './useTranslations';
+import { useMaestroStore } from '../../store';
+import { useShallow } from 'zustand/shallow';
 
 const AUX_TEXT_MODEL_ID = 'gemini-3-flash-preview';
 
@@ -60,14 +59,14 @@ export interface UseMaestroControllerConfig {
   
   // Settings
   settingsRef: React.MutableRefObject<AppSettings>;
-  setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
+  setSettings: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
   selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
   
   // Chat store
   messagesRef: React.MutableRefObject<ChatMessage[]>;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>) => void;
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  setMessages: (messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
   isLoadingHistoryRef: React.MutableRefObject<boolean>;
   getHistoryRespectingBookmark: (arr: ChatMessage[]) => ChatMessage[];
   computeMaxMessagesForArray: (arr: ChatMessage[]) => number | undefined;
@@ -95,10 +94,6 @@ export interface UseMaestroControllerConfig {
   cancelReengagementRef: React.MutableRefObject<() => void>;
   
   // UI State
-  setAttachedImageBase64: React.Dispatch<React.SetStateAction<string | null>>;
-  setAttachedImageMimeType: React.Dispatch<React.SetStateAction<string | null>>;
-  attachedImageBase64: string | null;
-  attachedImageMimeType: string | null;
   transcript: string;
   
   // Prompts
@@ -106,10 +101,8 @@ export interface UseMaestroControllerConfig {
   currentReplySuggestionsPromptText: string;
   
   // Reply suggestions (managed by useChatStore, passed through)
-  replySuggestions: ReplySuggestion[];
-  setReplySuggestions: React.Dispatch<React.SetStateAction<ReplySuggestion[]>>;
-  isLoadingSuggestions: boolean;
-  setIsLoadingSuggestions: React.Dispatch<React.SetStateAction<boolean>>;
+  setReplySuggestions: (suggestions: ReplySuggestion[] | ((prev: ReplySuggestion[]) => ReplySuggestion[])) => void;
+  setIsLoadingSuggestions: (value: boolean | ((prev: boolean) => boolean)) => void;
   isLoadingSuggestionsRef: React.MutableRefObject<boolean>;
   
   // Toggle suggestion mode callback - using ref to allow late binding
@@ -148,7 +141,7 @@ export interface UseMaestroControllerReturn {
   handleSuggestionInteraction: (suggestion: ReplySuggestion, langType: 'target' | 'native') => void;
   
   // Activity stage
-  setMaestroActivityStage: React.Dispatch<React.SetStateAction<MaestroActivityStage>>;
+  setMaestroActivityStage: (stage: MaestroActivityStage) => void;
   
   // Parsing
   parseGeminiResponse: (responseText: string | undefined) => Array<{ spanish: string; english: string }>;
@@ -195,18 +188,10 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     pendingRecordedAudioMessageRef,
     scheduleReengagementRef,
     cancelReengagementRef,
-    setAttachedImageBase64,
-    setAttachedImageMimeType,
-    attachedImageBase64,
-    attachedImageMimeType,
     transcript,
     currentSystemPromptText,
     currentReplySuggestionsPromptText,
-    // Reply suggestions (managed by useChatStore, passed through)
-    // Note: replySuggestions and isLoadingSuggestions are accessed via their setters/refs
-    replySuggestions: _replySuggestions,
     setReplySuggestions,
-    isLoadingSuggestions: _isLoadingSuggestions,
     setIsLoadingSuggestions,
     isLoadingSuggestionsRef,
     handleToggleSuggestionModeRef,
@@ -214,10 +199,34 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     maestroAvatarMimeTypeRef,
     setSnapshotUserError,
   } = config;
-  
-  // Suppress unused warnings - these are used via their refs and setters
-  void _replySuggestions;
-  void _isLoadingSuggestions;
+
+  const {
+    isSending,
+    sendPrep,
+    latestGroundingChunks,
+    maestroActivityStage,
+    isCreatingSuggestion,
+    imageLoadDurations,
+    attachedImageBase64,
+    attachedImageMimeType,
+  } = useMaestroStore(useShallow(state => ({
+    isSending: state.isSending,
+    sendPrep: state.sendPrep,
+    latestGroundingChunks: state.latestGroundingChunks,
+    maestroActivityStage: state.maestroActivityStage,
+    isCreatingSuggestion: state.isCreatingSuggestion,
+    imageLoadDurations: state.imageLoadDurations,
+    attachedImageBase64: state.attachedImageBase64,
+    attachedImageMimeType: state.attachedImageMimeType,
+  })));
+
+  const setIsSending = useMaestroStore(state => state.setIsSending);
+  const setSendPrep = useMaestroStore(state => state.setSendPrep);
+  const setLatestGroundingChunks = useMaestroStore(state => state.setLatestGroundingChunks);
+  const setIsCreatingSuggestion = useMaestroStore(state => state.setIsCreatingSuggestion);
+  const addImageLoadDuration = useMaestroStore(state => state.addImageLoadDuration);
+  const setAttachedImage = useMaestroStore(state => state.setAttachedImage);
+  const setMaestroActivityStage = useMaestroStore(state => state.setMaestroActivityStage);
 
   // Refs
   const isSendingRef = useRef(false);
@@ -226,14 +235,6 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
   const handleSendMessageInternalRef = useRef<any>(null);
   const sendPrepRef = useRef<{ active: boolean; label: string; done?: number; total?: number; etaMs?: number } | null>(null);
   const isMountedRef = useRef(true);
-
-  // State
-  const [isSending, setIsSending] = useState(false);
-  const [sendPrep, setSendPrep] = useState<{ active: boolean; label: string; done?: number; total?: number; etaMs?: number } | null>(null);
-  const [latestGroundingChunks, setLatestGroundingChunks] = useState<GroundingChunk[] | undefined>(undefined);
-  const [maestroActivityStage, setMaestroActivityStage] = useState<MaestroActivityStage>('idle');
-  const [isCreatingSuggestion, setIsCreatingSuggestion] = useState(false);
-  const [imageLoadDurations, setImageLoadDurations] = useState<number[]>([]);
 
   // Sync refs with state
   useEffect(() => { isSendingRef.current = isSending; }, [isSending]);
@@ -909,7 +910,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
 
     if (finalResult && 'base64Image' in finalResult) {
       const duration = Date.now() - userImageGenStartTime;
-      setImageLoadDurations(prev => [...prev, duration]);
+      addImageLoadDuration(duration);
       try {
         const { optimized, upload } = await optimizeAndUploadMedia({
           dataUrl: finalResult.base64Image as string,
@@ -954,7 +955,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     maestroAvatarMimeTypeRef,
     maestroAvatarUriRef,
     optimizeAndUploadMedia,
-    setImageLoadDurations,
+    addImageLoadDuration,
     setSendPrep,
     t,
     updateMessage,
@@ -1020,7 +1021,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
 
       if ('base64Image' in assistantImgGenResult) {
         const duration = Date.now() - assistantStartTime;
-        setImageLoadDurations(prev => [...prev, duration]);
+        addImageLoadDuration(duration);
         try {
           const { optimized, upload } = await optimizeAndUploadMedia({
             dataUrl: assistantImgGenResult.base64Image as string,
@@ -1070,7 +1071,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     messagesRef,
     optimizeAndUploadMedia,
     resolveBookmarkContextSummary,
-    setImageLoadDurations,
+    addImageLoadDuration,
     setSendPrep,
     t,
     updateMessage,
@@ -1359,8 +1360,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
       }
 
       if (messageType === 'user') {
-        setAttachedImageBase64(null);
-        setAttachedImageMimeType(null);
+        setAttachedImage(null, null);
         if (sanitizedText === stripBracketedContent(transcript || '') && (transcript || '').length > 0) {
           clearTranscript();
         }
@@ -1442,8 +1442,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
       scheduleReengagementRef.current('send-error');
 
       if (messageType === 'user') {
-        setAttachedImageBase64(null);
-        setAttachedImageMimeType(null);
+        setAttachedImage(null, null);
       }
       setReplySuggestions([]);
       setIsLoadingSuggestions(false);
@@ -1485,8 +1484,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     currentSystemPromptText,
     attachedImageBase64,
     attachedImageMimeType,
-    setAttachedImageBase64,
-    setAttachedImageMimeType,
+    setAttachedImage,
     setIsLoadingSuggestions,
     setIsSending,
     setLatestGroundingChunks,

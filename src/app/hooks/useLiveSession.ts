@@ -13,7 +13,7 @@
  * - Reply suggestion generation
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { 
   ChatMessage, 
   AppSettings,
@@ -21,11 +21,11 @@ import {
   RecordedUtterance,
   TtsAudioCacheEntry 
 } from '../../core/types';
-import { useGeminiLiveConversation, LiveSessionState } from '../../features/speech/hooks/useGeminiLiveConversation';
+import { useGeminiLiveConversation, LiveSessionState, pcmToWav, splitPcmBySilence } from '../../features/speech';
 import { generateImage, sanitizeHistoryWithVerifiedUris, uploadMediaToFiles } from '../../api/gemini';
-import { getGlobalProfileDB } from '../../features/session/services/globalProfile';
-import { deriveHistoryForApi } from '../../features/chat/services/chatHistory';
-import { processMediaForUpload } from '../../features/vision/services/mediaOptimizationService';
+import { getGlobalProfileDB } from '../../features/session';
+import { deriveHistoryForApi, computeTtsCacheKey } from '../../features/chat';
+import { processMediaForUpload } from '../../features/vision';
 import { MAX_MEDIA_TO_KEEP } from '../../core/config/app';
 import { 
   DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE, 
@@ -33,9 +33,8 @@ import {
   IMAGE_GEN_USER_PROMPT_TEMPLATE 
 } from '../../core/config/prompts';
 import { getPrimaryCode } from '../../shared/utils/languageUtils';
-import { pcmToWav, splitPcmBySilence } from '../../features/speech/utils/audioProcessing';
-import { computeTtsCacheKey } from '../../features/chat/utils/persistence';
 import type { TranslationFunction } from './useTranslations';
+import { useMaestroStore } from '../../store';
 
 export interface UseLiveSessionConfig {
   // Translation function
@@ -141,9 +140,11 @@ export const useLiveSession = (config: UseLiveSessionConfig): UseLiveSessionRetu
     maestroAvatarMimeTypeRef,
   } = config;
 
-  // --- State ---
-  const [liveSessionState, setLiveSessionState] = useState<LiveSessionState>('idle');
-  const [liveSessionError, setLiveSessionError] = useState<string | null>(null);
+  // --- State (Zustand) ---
+  const liveSessionState = useMaestroStore(state => state.liveSessionState);
+  const liveSessionError = useMaestroStore(state => state.liveSessionError);
+  const setLiveSessionState = useMaestroStore(state => state.setLiveSessionState);
+  const setLiveSessionError = useMaestroStore(state => state.setLiveSessionError);
 
   // --- Refs ---
   const liveSessionShouldRestoreSttRef = useRef(false);

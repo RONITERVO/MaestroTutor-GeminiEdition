@@ -4,17 +4,15 @@ import { TranslationReplacements } from '../../../core/i18n/index';
 import { CameraDevice } from '../../../core/types';
 import { LanguageDefinition } from '../../../core/config/languages';
 import { LOCAL_STORAGE_SETTINGS_KEY, IMAGE_GEN_CAMERA_ID } from '../../../core/config/app';
-import { LiveSessionState } from '../../speech/hooks/useGeminiLiveConversation';
+import { LiveSessionState, SttLanguageSelector } from '../../speech';
 import { 
   IconSend, IconPaperclip, IconMicrophone, IconXMark, IconCamera, 
   IconCameraFront, IconBookOpen, IconPencil, IconPlus, IconSparkles, 
   IconUndo, IconCheck, IconSave, IconFolderOpen, IconTrash, IconRobot, IconSpeaker
 } from '../../../shared/ui/Icons';
 import { SmallSpinner } from '../../../shared/ui/SmallSpinner';
-import SttLanguageSelector from '../../speech/components/SttLanguageSelector'; 
-import LanguageSelectorGlobe from '../../session/components/LanguageSelectorGlobe'; 
+import { LanguageSelectorGlobe, getGlobalProfileDB, setGlobalProfileDB } from '../../session';
 import { getMaestroProfileImageDB, setMaestroProfileImageDB, clearMaestroProfileImageDB, MaestroProfileAsset } from '../../../core/db/assets';
-import { getGlobalProfileDB, setGlobalProfileDB } from '../../session/services/globalProfile';
 import { uploadMediaToFiles, deleteFileByNameOrUri } from '../../../api/gemini';
 import { DB_NAME } from '../../../core/db/index';
 import { uniq as _uniq } from '../../../shared/utils/common';

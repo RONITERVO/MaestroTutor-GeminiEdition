@@ -1,6 +1,13 @@
 // Copyright 2025 Roni Tervo
 //
 // SPDX-License-Identifier: Apache-2.0
+/**
+ * useSpeechController - Hook for orchestrating speech (TTS/STT) functionality.
+ * 
+ * Wraps useBrowserSpeech and adds caching, message speaking, etc.
+ * Syncs key state to Zustand store for cross-component access.
+ */
+
 import { useCallback, useRef, useEffect } from 'react';
 import { 
   ChatMessage, 
@@ -10,13 +17,10 @@ import {
   ReplySuggestion,
   LanguagePair 
 } from '../../core/types';
-import useBrowserSpeech from '../../features/speech/hooks/useBrowserSpeech';
+import { useBrowserSpeech } from '../../features/speech';
 import { getPrimaryCode } from '../../shared/utils/languageUtils';
-import { 
-  INLINE_CAP_AUDIO, 
-  computeTtsCacheKey, 
-  getCachedAudioForKey 
-} from '../../features/chat/utils/persistence';
+import { INLINE_CAP_AUDIO, computeTtsCacheKey, getCachedAudioForKey } from '../../features/chat';
+import { useMaestroStore } from '../../store';
 
 export interface UseSpeechControllerConfig {
   settingsRef: React.MutableRefObject<{
@@ -82,6 +86,13 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
     upsertSuggestionTtsCache,
     setMessages,
   } = config;
+
+  // Get store actions for syncing state
+  const setStoreIsListening = useMaestroStore(state => state.setIsListening);
+  const setStoreTranscript = useMaestroStore(state => state.setTranscript);
+  const setStoreSttError = useMaestroStore(state => state.setSttError);
+  const setStoreIsSpeaking = useMaestroStore(state => state.setIsSpeaking);
+  const setStoreSpeakingUtteranceText = useMaestroStore(state => state.setSpeakingUtteranceText);
 
   const speechIsSpeakingRef = useRef<boolean>(false);
   const recordedUtterancePendingRef = useRef<RecordedUtterance | null>(null);
@@ -158,10 +169,27 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
     }, [setMessages])
   });
 
-  // Sync speaking state to ref
+  // Sync speech state to store
   useEffect(() => {
     speechIsSpeakingRef.current = isSpeaking;
-  }, [isSpeaking]);
+    setStoreIsSpeaking(isSpeaking);
+  }, [isSpeaking, setStoreIsSpeaking]);
+
+  useEffect(() => {
+    setStoreIsListening(isListening);
+  }, [isListening, setStoreIsListening]);
+
+  useEffect(() => {
+    setStoreTranscript(transcript);
+  }, [transcript, setStoreTranscript]);
+
+  useEffect(() => {
+    setStoreSttError(sttError);
+  }, [sttError, setStoreSttError]);
+
+  useEffect(() => {
+    setStoreSpeakingUtteranceText(speakingUtteranceText);
+  }, [speakingUtteranceText, setStoreSpeakingUtteranceText]);
 
   const prepareSpeechPartsWithCache = useCallback((parts: SpeechPart[], defaultLang: string): SpeechPart[] => {
     const provider = settingsRef.current.tts?.provider || 'browser';

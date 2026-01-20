@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ChatMessage, GroundingChunk, ReplySuggestion, MaestroActivityStage, SpeechPart, CameraDevice } from '../../../core/types';
-import { LiveSessionState } from '../../speech/hooks/useGeminiLiveConversation';
+import { LiveSessionState } from '../../speech';
 import { TranslationReplacements } from '../../../core/i18n/index';
 import { IconEyeOpen, IconBookmark, IconTrash } from '../../../shared/ui/Icons';
 import BookmarkActions from './BookmarkActions';

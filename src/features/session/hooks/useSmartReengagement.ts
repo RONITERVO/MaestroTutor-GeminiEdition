@@ -1,7 +1,8 @@
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import type { MutableRefObject } from 'react';
 import { AppSettings } from '../../../core/types';
+import { useMaestroStore } from '../../../store';
 
 interface UseSmartReengagementProps {
   settings: AppSettings;
@@ -19,8 +20,6 @@ interface UseSmartReengagementProps {
   removeUiBusyToken: (token?: string | null) => void;
 }
 
-type ReengagementPhase = 'idle' | 'waiting' | 'watching' | 'countdown' | 'engaging';
-
 export const useSmartReengagement = ({
   settings,
   isLoadingHistory,
@@ -35,7 +34,10 @@ export const useSmartReengagement = ({
   addUiBusyToken,
   removeUiBusyToken
 }: UseSmartReengagementProps) => {
-  const [reengagementPhase, setReengagementPhase] = useState<ReengagementPhase>('idle');
+  const reengagementPhase = useMaestroStore(state => state.reengagementPhase);
+  const setReengagementPhase = useMaestroStore(state => state.setReengagementPhase);
+  const setReengagementDeadline = useMaestroStore(state => state.setReengagementDeadline);
+  const setIsUserActive = useMaestroStore(state => state.setIsUserActive);
   const reengagementTimersRef = useRef<{ waitTimer: number | null; countdownTimer: number | null }>({ waitTimer: null, countdownTimer: null });
   const reengagementTokensRef = useRef<{ waitToken: string | null; countdownToken: string | null }>({ waitToken: null, countdownToken: null });
   const reengagementDeadlineRef = useRef<number | null>(null);
@@ -90,8 +92,9 @@ export const useSmartReengagement = ({
       tokens.countdownToken = null;
     }
     reengagementDeadlineRef.current = null;
+    setReengagementDeadline(null);
     setReengagementPhase('idle');
-  }, [removeUiBusyToken]);
+  }, [removeUiBusyToken, setReengagementDeadline, setReengagementPhase]);
 
   const startWaitTimer = useCallback((delayMs: number, reason: string) => {
     if (!canScheduleReengagement()) {
@@ -128,6 +131,7 @@ export const useSmartReengagement = ({
         const secondPhase = clampedDelay - firstPhase;
         
         reengagementDeadlineRef.current = Date.now() + clampedDelay;
+        setReengagementDeadline(reengagementDeadlineRef.current);
         setReengagementPhase('waiting'); // Low attention / Resting
         
         timers.waitTimer = window.setTimeout(() => {
@@ -142,6 +146,7 @@ export const useSmartReengagement = ({
         
     } else {
         reengagementDeadlineRef.current = Date.now() + clampedDelay;
+        setReengagementDeadline(reengagementDeadlineRef.current);
         setReengagementPhase('watching'); // Short delay directly to observing
         timers.waitTimer = window.setTimeout(() => {
             timers.waitTimer = null;
@@ -193,6 +198,7 @@ export const useSmartReengagement = ({
     const token = addUiBusyToken(`reengage-countdown:${reason}:${Date.now()}`);
     tokens.countdownToken = token;
     reengagementDeadlineRef.current = null;
+    setReengagementDeadline(null);
     setReengagementPhase('countdown');
     timers.countdownTimer = window.setTimeout(async () => {
       timers.countdownTimer = null;
@@ -207,7 +213,7 @@ export const useSmartReengagement = ({
       cancelReengagement();
       await triggerReengagementSequenceRef.current();
     }, 5000);
-  }, [canScheduleReengagement, scheduleReengagement, removeUiBusyToken, addUiBusyToken, cancelReengagement]);
+  }, [canScheduleReengagement, scheduleReengagement, removeUiBusyToken, addUiBusyToken, cancelReengagement, setReengagementDeadline, setReengagementPhase]);
 
   useEffect(() => {
     beginCountdownRef.current = beginCountdown;
@@ -215,9 +221,13 @@ export const useSmartReengagement = ({
 
   const handleUserActivity = useCallback(() => {
     isUserActiveRef.current = true;
+    setIsUserActive(true);
     cancelReengagement();
-    setTimeout(() => { isUserActiveRef.current = false; }, 3000);
-  }, [cancelReengagement]);
+    setTimeout(() => { 
+      isUserActiveRef.current = false; 
+      setIsUserActive(false);
+    }, 3000);
+  }, [cancelReengagement, setIsUserActive]);
 
   return {
     reengagementPhase,
