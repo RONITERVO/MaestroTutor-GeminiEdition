@@ -62,7 +62,9 @@ class DebugLogService {
       },
       error: (errorPayload: any) => {
         const duration = Date.now() - timestamp;
-        const safeError = errorPayload instanceof Error ? { name: errorPayload.name, stack: errorPayload.stack, message: errorPayload.message } : errorPayload;
+        const safeError = errorPayload instanceof Error
+          ? { ...errorPayload, name: errorPayload.name, message: errorPayload.message, stack: errorPayload.stack }
+          : errorPayload;
         this.updateEntry(id, { error: safeError, duration });
       }
     };

@@ -38,13 +38,11 @@ export const useUiBusyState = (): UseUiBusyStateReturn => {
     const tags: string[] = [];
     let nonReengagementCount = 0;
     uiBusyTokensRef.current.forEach(tok => {
-      if (typeof tok !== 'string') return;
       const tag = tok.split(':')[0];
       if (tag) tags.push(tag);
       if (!tok.startsWith('reengage-')) nonReengagementCount++;
     });
-    const seen = new Set<string>();
-    const uniqTags = tags.filter(t => (seen.has(t) ? false : (seen.add(t), true)));
+    const uniqTags = Array.from(new Set(tags));
     setUiBusyTaskTags(uniqTags);
     setExternalUiTaskCount(nonReengagementCount);
   }, []);
@@ -75,7 +73,10 @@ export const useUiBusyState = (): UseUiBusyStateReturn => {
       removeUiBusyToken(holdUiTokenRef.current);
       holdUiTokenRef.current = null;
     } else {
-      const token = addUiBusyToken('user-hold');
+      const uniqueId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : String(Date.now());
+      const token = addUiBusyToken(`user-hold:${uniqueId}`);
       holdUiTokenRef.current = token;
     }
   }, [addUiBusyToken, removeUiBusyToken]);

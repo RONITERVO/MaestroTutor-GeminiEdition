@@ -62,16 +62,10 @@ const loadFromLocalStorage = <T,>(key: string, defaultValue: T): T => {
           if (!(initialKey in mergedSettings)) {
             mergedSettings[initialKey] = (initialSettings as any)[initialKey];
           }
-          if (typeof mergedSettings.imageGenerationModeEnabled === 'undefined') {
-            mergedSettings.imageGenerationModeEnabled = initialSettings.imageGenerationModeEnabled;
-          }
-          if (typeof mergedSettings.imageFocusedModeEnabled === 'undefined') {
-            mergedSettings.imageFocusedModeEnabled = initialSettings.imageFocusedModeEnabled;
-          }
-          if (typeof mergedSettings.maxVisibleMessages === 'undefined' || mergedSettings.maxVisibleMessages === null) {
-            mergedSettings.maxVisibleMessages = MAX_VISIBLE_MESSAGES_DEFAULT;
-          }
         });
+        if (typeof mergedSettings.maxVisibleMessages === 'undefined' || mergedSettings.maxVisibleMessages === null) {
+          mergedSettings.maxVisibleMessages = MAX_VISIBLE_MESSAGES_DEFAULT;
+        }
         // Ensure nested objects have all required keys
         ['tts', 'stt', 'smartReengagement'].forEach(nestedKey => {
           if (mergedSettings[nestedKey] && (initialSettings as any)[nestedKey]) {

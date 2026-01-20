@@ -6,6 +6,8 @@ import { translations, TranslationReplacements } from '../../core/i18n/index';
 
 export type TranslationFunction = (key: string, replacements?: TranslationReplacements) => string;
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Hook providing internationalization support.
  * Returns a translation function `t` based on the current language.
@@ -14,13 +16,14 @@ export type TranslationFunction = (key: string, replacements?: TranslationReplac
  * @returns Object containing the translation function
  */
 export const useTranslations = (nativeLangCode: string) => {
-  const lang = useMemo(() => nativeLangCode.substring(0, 2), [nativeLangCode]);
+  const lang = useMemo(() => nativeLangCode.substring(0, 2).toLowerCase(), [nativeLangCode]);
 
   const t = useCallback((key: string, replacements?: TranslationReplacements): string => {
     let translation = translations[lang]?.[key] || translations.en[key] || key;
     if (replacements) {
       Object.keys(replacements).forEach(rKey => {
-        translation = translation.replace(`{${rKey}}`, String(replacements[rKey]));
+        const escapedRKey = escapeRegExp(rKey);
+        translation = translation.replace(new RegExp(`\\{${escapedRKey}\\}`, 'g'), String(replacements[rKey]));
       });
     }
     return translation;

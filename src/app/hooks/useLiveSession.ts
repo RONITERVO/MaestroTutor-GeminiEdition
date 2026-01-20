@@ -355,13 +355,6 @@ export const useLiveSession = (config: UseLiveSessionConfig): UseLiveSessionRetu
                 flatIndex++;
               }
             });
-            completeHistory = completeHistory.map((msg) => {
-              if (msg.id !== assistantId) {
-                return msg;
-              }
-              const updated = messagesRef.current.find(m => m.id === assistantId) || msg;
-              return { ...msg, ttsAudioCache: updated.ttsAudioCache };
-            });
           }
 
           updateMessage(assistantId, {

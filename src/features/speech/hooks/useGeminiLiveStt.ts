@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality, Blob as _GenAIBlob } from '@google/genai';
+import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { mergeInt16Arrays, trimSilence } from '../utils/audioProcessing';
 
 export interface UseGeminiLiveSttReturn {

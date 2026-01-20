@@ -5,6 +5,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { CameraDevice } from '../../core/types';
 import type { TranslationFunction } from './useTranslations';
 import { IMAGE_GEN_CAMERA_ID } from '../../core/config/app';
+import { getFacingModeFromLabel } from '../../features/vision/utils/mediaUtils';
 
 export interface UseHardwareConfig {
   t: TranslationFunction;
@@ -52,13 +53,6 @@ export interface UseHardwareReturn {
   /** Whether microphone API is available */
   microphoneApiAvailable: boolean;
 }
-
-const getFacingModeFromLabel = (label: string): 'user' | 'environment' | 'unknown' => {
-  const lowerLabel = label.toLowerCase();
-  if (lowerLabel.includes('front') || lowerLabel.includes('user')) return 'user';
-  if (lowerLabel.includes('back') || lowerLabel.includes('rear') || lowerLabel.includes('environment')) return 'environment';
-  return 'unknown';
-};
 
 /**
  * Hook for managing hardware access (camera, microphone).

@@ -1,5 +1,6 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import type { MutableRefObject } from 'react';
 import { AppSettings } from '../../../core/types';
 
 interface UseSmartReengagementProps {
@@ -9,8 +10,8 @@ interface UseSmartReengagementProps {
   isSending: boolean;
   isSpeaking: boolean;
   // Optional refs for real-time state checking (used when values might be stale)
-  isSendingRef?: React.MutableRefObject<boolean>;
-  isSpeakingRef?: React.MutableRefObject<boolean>;
+  isSendingRef?: MutableRefObject<boolean>;
+  isSpeakingRef?: MutableRefObject<boolean>;
   isVisualContextActive: boolean;
   externalUiTaskCount: number;
   triggerReengagementSequence: () => Promise<void>;

@@ -173,6 +173,14 @@ export const useDataBackup = ({
         alert(t('startPage.loadError'));
       }
     };
+    reader.onerror = (e) => {
+      console.error("Failed to load chats:", e);
+      alert(t('startPage.loadError'));
+    };
+    reader.onabort = (e) => {
+      console.error("Failed to load chats:", e);
+      alert(t('startPage.loadError'));
+    };
     reader.readAsText(file);
   }, [handleSaveAllChats, t, settingsRef, setMessages, setLoadingGifs, setTempNativeLangCode, setTempTargetLangCode, setIsLanguageSelectionOpen]);
 

@@ -141,8 +141,17 @@ export async function uploadMediaToFiles(dataUrl: string, mimeType: string, disp
         file,
         config: { displayName, mimeType },
     });
+    if (!uploadResult) {
+      throw new Error('Upload failed: missing result');
+    }
+    if (!uploadResult.uri || !uploadResult.uri.trim()) {
+      throw new Error('Upload failed: missing uri');
+    }
+    if (!uploadResult.mimeType || !uploadResult.mimeType.trim()) {
+      throw new Error('Upload failed: missing mimeType');
+    }
     log.complete(uploadResult);
-    return { uri: uploadResult.uri || '', mimeType: uploadResult.mimeType || '' };
+    return { uri: uploadResult.uri, mimeType: uploadResult.mimeType };
   } catch (e) {
     log.error(e);
     throw e;
@@ -345,8 +354,11 @@ export async function generateImage(params: {
       const candidates = result.candidates || [];
       for (const c of candidates) {
           for (const part of c.content?.parts || []) {
-              if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
-                  return { base64Image: `data:${part.inlineData.mimeType};base64,${part.inlineData.data || ''}`, mimeType: part.inlineData.mimeType };
+              const inlineData = part.inlineData;
+              if (inlineData && inlineData.mimeType?.startsWith('image/')) {
+                  if (typeof inlineData.data === 'string' && inlineData.data.trim() !== '') {
+                      return { base64Image: `data:${inlineData.mimeType};base64,${inlineData.data}`, mimeType: inlineData.mimeType };
+                  }
               }
           }
       }

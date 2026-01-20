@@ -245,7 +245,7 @@ export const useChatStore = (config: UseChatStoreConfig): UseChatStoreReturn => 
   const trimHistoryByBookmark = useCallback((arr: ChatMessage[]): ChatMessage[] => {
     const bm = settingsRef.current.historyBookmarkMessageId;
     if (!bm) return arr;
-    if (!messagesRef.current.some(m => m.id === bm)) return arr;
+    if (!arr.some(m => m.id === bm)) return arr;
     const idx = arr.findIndex(m => m.id === bm && !m.thinking);
     if (idx === -1) return arr;
     return arr.slice(idx + 1);
