@@ -48,7 +48,7 @@ import {
 } from '../../core/config/prompts';
 import { isRealChatMessage } from '../../shared/utils/common';
 import { INLINE_CAP_AUDIO } from '../../features/chat/utils/persistence';
-import { getPrimaryCode, getShortLangCodeForPrompt } from '../../shared/utils/languageUtils';
+import { getShortLangCodeForPrompt } from '../../shared/utils/languageUtils';
 import { createKeyframeFromVideoDataUrl } from '../../features/vision/utils/mediaUtils';
 import type { TranslationFunction } from './useTranslations';
 
@@ -225,6 +225,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
   // maestroAvatarUriRef and maestroAvatarMimeTypeRef are now passed via config
   const handleSendMessageInternalRef = useRef<any>(null);
   const sendPrepRef = useRef<{ active: boolean; label: string; done?: number; total?: number; etaMs?: number } | null>(null);
+  const isMountedRef = useRef(true);
 
   // State
   const [isSending, setIsSending] = useState(false);
@@ -237,6 +238,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
   // Sync refs with state
   useEffect(() => { isSendingRef.current = isSending; }, [isSending]);
   useEffect(() => { sendPrepRef.current = sendPrep; }, [sendPrep]);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
 
   // Utility functions
   const stripBracketedContent = useCallback((input: string | undefined | null): string => {
@@ -309,13 +311,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     arr: ChatMessage[], 
     onProgress?: (done: number, total: number, etaMs?: number) => void
   ): Promise<Record<string, { oldUri?: string; newUri: string }>> => {
-    const keepK = Number.POSITIVE_INFINITY;
-
-    let candidates = computeHistorySubsetForMedia(arr);
-    if (Number.isFinite(keepK)) {
-      const start = Math.max(0, candidates.length - (keepK as number));
-      candidates = candidates.slice(start);
-    }
+    const candidates = computeHistorySubsetForMedia(arr);
 
     const mediaIndices: number[] = [];
     for (let i = 0; i < candidates.length; i++) {
@@ -596,6 +592,8 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     messagesRef,
     selectedLanguagePairRef,
     settingsRef,
+    setIsLoadingSuggestions,
+    setReplySuggestions,
     updateMessage
   ]);
 
@@ -668,18 +666,415 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
 
   const handleSuggestionInteraction = useCallback((suggestion: ReplySuggestion, langType: 'target' | 'native') => {
     if (!selectedLanguagePairRef.current) return;
+    if (speechIsSpeakingRef.current) return;
+    if (!suggestion.target && !suggestion.native) return;
+    void langType;
+    // Speech handled by App-level speakWrapper.
+  }, [selectedLanguagePairRef, speechIsSpeakingRef]);
 
-    if (!speechIsSpeakingRef.current) {
-      const textToSpeak = langType === 'target' ? suggestion.target : suggestion.native;
-      const langCodeToUse = langType === 'target'
-        ? getPrimaryCode(selectedLanguagePairRef.current.targetLanguageCode)
-        : getPrimaryCode(selectedLanguagePairRef.current.nativeLanguageCode);
+  const requestReplySuggestions = useCallback((assistantMessageId: string, lastTutorMessage: string, history: ChatMessage[]) => {
+    fetchAndSetReplySuggestions(assistantMessageId, lastTutorMessage, history);
+    lastFetchedSuggestionsForRef.current = assistantMessageId;
+  }, [fetchAndSetReplySuggestions, lastFetchedSuggestionsForRef]);
 
-      if (textToSpeak && langCodeToUse) {
-        // Speech handled by App-level speakWrapper.
+  const optimizeAndUploadMedia = useCallback(async (params: {
+    dataUrl: string;
+    mimeType: string;
+    displayName: string;
+    onProgress?: (label: string, done?: number, total?: number, etaMs?: number) => void;
+    setUploadPrepLabel?: boolean;
+  }) => {
+    const optimized = await processMediaForUpload(params.dataUrl, params.mimeType, { t, onProgress: params.onProgress });
+    sendWithFileUploadInProgressRef.current = true;
+    if (params.setUploadPrepLabel !== false) {
+      setSendPrep(prev => (prev && prev.active
+        ? { ...prev, label: t('chat.sendPrep.uploadingMedia') || 'Uploading media...' }
+        : { active: true, label: t('chat.sendPrep.uploadingMedia') || 'Uploading media...' }));
+    }
+    const upload = await uploadMediaToFiles(params.dataUrl, params.mimeType, params.displayName);
+    return { optimized, upload };
+  }, [t, setSendPrep]);
+
+  const createUserMessage = useCallback(async (params: {
+    sanitizedText: string;
+    passedImageBase64?: string;
+    passedImageMimeType?: string;
+    messageType: 'user' | 'conversational-reengagement' | 'image-reengagement';
+    shouldGenerateUserImage: boolean;
+    currentSettingsVal: AppSettings;
+  }) => {
+    let userMessageId: string | null = null;
+    let userMessageText = params.sanitizedText;
+    let recordedSpeechForMessage: RecordedUtterance | null = null;
+    let userImageToProcessBase64: string | undefined = (typeof params.passedImageBase64 === 'string' && params.passedImageBase64)
+      ? params.passedImageBase64
+      : undefined;
+    let userImageToProcessMimeType: string | undefined = (typeof params.passedImageMimeType === 'string' && params.passedImageMimeType)
+      ? params.passedImageMimeType
+      : undefined;
+    let userImageToProcessLlmBase64: string | undefined = undefined;
+    let userImageToProcessLlmMimeType: string | undefined = undefined;
+
+    if (params.messageType !== 'user') {
+      return {
+        userMessageId,
+        userMessageText,
+        recordedSpeechForMessage,
+        userImageToProcessBase64,
+        userImageToProcessMimeType,
+        userImageToProcessLlmBase64,
+        userImageToProcessLlmMimeType,
+      };
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const claimed = typeof claimRecordedUtterance === 'function' ? claimRecordedUtterance() : null;
+      if (claimed && typeof claimed.dataUrl === 'string' && claimed.dataUrl.length > 0) {
+        recordedSpeechForMessage = claimed;
+        recordedUtterancePendingRef.current = null;
+        break;
+      }
+      if (recordedUtterancePendingRef.current && typeof recordedUtterancePendingRef.current.dataUrl === 'string' && recordedUtterancePendingRef.current.dataUrl.length > 0) {
+        recordedSpeechForMessage = recordedUtterancePendingRef.current;
+        recordedUtterancePendingRef.current = null;
+        break;
+      }
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
       }
     }
-  }, [selectedLanguagePairRef, speechIsSpeakingRef]);
+    if (recordedSpeechForMessage && recordedSpeechForMessage.dataUrl.length > INLINE_CAP_AUDIO) {
+      recordedSpeechForMessage = null;
+    }
+
+    if (params.currentSettingsVal.sendWithSnapshotEnabled && !userImageToProcessBase64 && !params.shouldGenerateUserImage) {
+      const snapshotResult = await captureSnapshot(false);
+      if (snapshotResult) {
+        userImageToProcessBase64 = snapshotResult.base64;
+        userImageToProcessMimeType = snapshotResult.mimeType;
+        userImageToProcessLlmBase64 = snapshotResult.llmBase64;
+        userImageToProcessLlmMimeType = snapshotResult.llmMimeType;
+      }
+    }
+
+    // Handle video keyframe extraction
+    const keyframeSrcBase64 = (typeof params.passedImageBase64 === 'string' && params.passedImageBase64)
+      ? params.passedImageBase64
+      : attachedImageBase64;
+    const keyframeSrcMime = (typeof params.passedImageMimeType === 'string' && params.passedImageMimeType)
+      ? params.passedImageMimeType
+      : attachedImageMimeType;
+    if (keyframeSrcBase64 && keyframeSrcMime && keyframeSrcMime.startsWith('video/')) {
+      try {
+        const kf = await createKeyframeFromVideoDataUrl(keyframeSrcBase64, { at: 'start', maxDim: 768, quality: 0.75, outputMime: 'image/jpeg' });
+        const kfId = addMessage({ role: 'user', text: userMessageText, imageUrl: kf.dataUrl, imageMimeType: kf.mimeType });
+        try {
+          if (!sendWithFileUploadInProgressRef.current) {
+            sendWithFileUploadInProgressRef.current = true;
+          }
+          updateMessage(kfId, { llmImageUrl: kf.dataUrl, llmImageMimeType: kf.mimeType });
+          const up = await uploadMediaToFiles(kf.dataUrl, kf.mimeType, 'keyframe-image');
+          updateMessage(kfId, { llmFileUri: up.uri, llmFileMimeType: up.mimeType });
+        } catch (e) {
+          // Ignore upload errors for keyframe
+        }
+        userMessageText = '';
+        userImageToProcessBase64 = keyframeSrcBase64;
+        userImageToProcessMimeType = keyframeSrcMime;
+      } catch (e) {
+        console.warn('Failed to create keyframe from video; proceeding without keyframe image message', e);
+      }
+    }
+
+    if (!userImageToProcessLlmBase64 && attachedImageBase64 && attachedImageMimeType) {
+      try {
+        if (!sendWithFileUploadInProgressRef.current) {
+          sendWithFileUploadInProgressRef.current = true;
+        }
+        const optimized = await processMediaForUpload(attachedImageBase64, attachedImageMimeType, { t });
+        userImageToProcessLlmBase64 = optimized.dataUrl;
+        userImageToProcessLlmMimeType = optimized.mimeType;
+      } catch {}
+    }
+
+    userMessageId = addMessage({
+      role: 'user',
+      text: userMessageText,
+      recordedUtterance: recordedSpeechForMessage || undefined,
+      imageUrl: userImageToProcessBase64,
+      imageMimeType: userImageToProcessMimeType,
+      llmImageUrl: userImageToProcessLlmBase64,
+      llmImageMimeType: userImageToProcessLlmMimeType,
+    });
+
+    return {
+      userMessageId,
+      userMessageText,
+      recordedSpeechForMessage,
+      userImageToProcessBase64,
+      userImageToProcessMimeType,
+      userImageToProcessLlmBase64,
+      userImageToProcessLlmMimeType,
+    };
+  }, [
+    addMessage,
+    attachedImageBase64,
+    attachedImageMimeType,
+    captureSnapshot,
+    claimRecordedUtterance,
+    recordedUtterancePendingRef,
+    sendWithFileUploadInProgressRef,
+    t,
+    updateMessage,
+  ]);
+
+  const handleGeminiResponse = useCallback(async (params: {
+    thinkingMessageId: string;
+    geminiPromptText: string;
+    sanitizedDerivedHistory: any[];
+    systemInstructionForGemini: string;
+    imageForGeminiContextMimeType?: string;
+    imageForGeminiContextFileUri?: string;
+    currentSettingsVal: AppSettings;
+  }) => {
+    const response = await generateGeminiResponse(
+      DEFAULT_TEXT_MODEL_ID,
+      params.geminiPromptText,
+      params.sanitizedDerivedHistory,
+      params.systemInstructionForGemini,
+      undefined,
+      params.imageForGeminiContextMimeType,
+      params.imageForGeminiContextFileUri,
+      params.currentSettingsVal.enableGoogleSearch,
+      undefined
+    );
+
+    const accumulatedFullText = response.text || "";
+    const parsedTranslationsOnComplete = parseGeminiResponse(accumulatedFullText);
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks as GroundingChunk[] | undefined;
+    if (groundingChunks?.length) {
+      setLatestGroundingChunks(groundingChunks);
+    }
+
+    const finalMessageUpdates = {
+      thinking: false,
+      translations: parsedTranslationsOnComplete.length > 0 ? parsedTranslationsOnComplete : undefined,
+      rawAssistantResponse: accumulatedFullText,
+      text: parsedTranslationsOnComplete.length === 0 ? accumulatedFullText : undefined,
+    };
+    updateMessage(params.thinkingMessageId, finalMessageUpdates);
+
+    return { accumulatedFullText, finalMessageUpdates };
+  }, [parseGeminiResponse, setLatestGroundingChunks, updateMessage]);
+
+  const runUserImageGeneration = useCallback(async (params: {
+    shouldGenerateUserImage: boolean;
+    currentSettingsVal: AppSettings;
+    messageType: 'user' | 'conversational-reengagement' | 'image-reengagement';
+    userMessageText: string;
+    userMessageId: string | null;
+    userImageToProcessBase64?: string;
+    sanitizedDerivedHistory: any[];
+  }) => {
+    if (!params.shouldGenerateUserImage || !params.currentSettingsVal.sendWithSnapshotEnabled || params.messageType !== 'user' ||
+      !params.userMessageText.trim() || !params.userMessageId || params.userImageToProcessBase64) {
+      return {};
+    }
+
+    const userImageGenStartTime = Date.now();
+    updateMessage(params.userMessageId, {
+      isGeneratingImage: true,
+      imageGenerationStartTime: userImageGenStartTime,
+      imageUrl: undefined,
+      imageMimeType: undefined,
+    });
+
+    const sanitizedUserHistoryForImage = params.sanitizedDerivedHistory as any;
+    let finalResult: any = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const prompt = IMAGE_GEN_USER_PROMPT_TEMPLATE.replace("{TEXT}", params.userMessageText);
+      const userImgGenResult = await generateImage({
+        history: sanitizedUserHistoryForImage,
+        latestMessageText: prompt,
+        latestMessageRole: 'user',
+        systemInstruction: IMAGE_GEN_SYSTEM_INSTRUCTION,
+        maestroAvatarUri: maestroAvatarUriRef.current || undefined,
+        maestroAvatarMimeType: maestroAvatarMimeTypeRef.current || undefined,
+      });
+      finalResult = userImgGenResult;
+      if ('base64Image' in userImgGenResult) break;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+    }
+
+    if (finalResult && 'base64Image' in finalResult) {
+      const duration = Date.now() - userImageGenStartTime;
+      setImageLoadDurations(prev => [...prev, duration]);
+      try {
+        const { optimized, upload } = await optimizeAndUploadMedia({
+          dataUrl: finalResult.base64Image as string,
+          mimeType: finalResult.mimeType as string,
+          displayName: 'user-generated',
+        });
+
+        updateMessage(params.userMessageId, {
+          imageUrl: finalResult.base64Image,
+          imageMimeType: finalResult.mimeType,
+          llmImageUrl: optimized.dataUrl,
+          llmImageMimeType: optimized.mimeType,
+          llmFileUri: upload.uri,
+          llmFileMimeType: upload.mimeType,
+          isGeneratingImage: false,
+          imageGenError: null,
+          imageGenerationStartTime: undefined
+        });
+        return { imageForGeminiContextFileUri: upload.uri, imageForGeminiContextMimeType: upload.mimeType };
+      } catch (e) {
+        updateMessage(params.userMessageId, {
+          imageUrl: finalResult.base64Image,
+          imageMimeType: finalResult.mimeType,
+          isGeneratingImage: false,
+          imageGenError: null,
+          imageGenerationStartTime: undefined
+        });
+      } finally {
+        setSendPrep(prev => (prev && prev.active ? { ...prev, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...' } : prev));
+      }
+    } else if (finalResult) {
+      updateMessage(params.userMessageId, {
+        imageGenError: (finalResult as any).error,
+        isGeneratingImage: false,
+        imageGenerationStartTime: undefined
+      });
+    }
+
+    return {};
+  }, [
+    generateImage,
+    maestroAvatarMimeTypeRef,
+    maestroAvatarUriRef,
+    optimizeAndUploadMedia,
+    setImageLoadDurations,
+    setSendPrep,
+    t,
+    updateMessage,
+  ]);
+
+  const runAssistantImageGeneration = useCallback(async (params: {
+    thinkingMessageId: string;
+    accumulatedFullText: string;
+    currentSettingsVal: AppSettings;
+  }) => {
+    if (!params.currentSettingsVal.imageGenerationModeEnabled || !params.accumulatedFullText.trim()) return;
+
+    const assistantStartTime = Date.now();
+    updateMessage(params.thinkingMessageId, {
+      isGeneratingImage: true,
+      imageGenerationStartTime: assistantStartTime
+    });
+
+    let historyForAssistantImageGen: ChatMessage[] | undefined = undefined;
+    try {
+      sendWithFileUploadInProgressRef.current = true;
+      const baseForEnsure: ChatMessage[] = getHistoryRespectingBookmark(messagesRef.current);
+      setSendPrep({ active: true, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...', done: 0, total: 0 });
+      const ensuredUpdates = await ensureUrisForHistoryForSend(baseForEnsure, (done, total, etaMs) => {
+        setSendPrep({ active: true, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...', done, total, etaMs });
+      });
+      historyForAssistantImageGen = baseForEnsure.map(m => {
+        const upd = ensuredUpdates[m.id];
+        if (upd && upd.newUri && (m as any).llmFileUri !== upd.newUri) {
+          return { ...m, llmFileUri: upd.newUri } as ChatMessage;
+        }
+        return m;
+      });
+      await new Promise(r => setTimeout(r, 0));
+    } catch { /* ignore */ }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const histForAssistantImgBase = historyForAssistantImageGen || getHistoryRespectingBookmark(messagesRef.current);
+      let gpTextForAssistant: string | undefined = undefined;
+      try {
+        const gp3 = await getGlobalProfileDB();
+        gpTextForAssistant = gp3?.text || undefined;
+      } catch {}
+
+      const assistantHistory = deriveHistoryForApi(histForAssistantImgBase, {
+        maxMessages: computeMaxMessagesForArray(getHistoryRespectingBookmark(messagesRef.current).filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant')),
+        maxMediaToKeep: MAX_MEDIA_TO_KEEP,
+        contextSummary: resolveBookmarkContextSummary() || undefined,
+        globalProfileText: gpTextForAssistant,
+        placeholderLatestUserMessage: DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE,
+      });
+      const sanitizedAssistantHistoryForImage = await sanitizeHistoryWithVerifiedUris(assistantHistory as any);
+
+      const prompt = IMAGE_GEN_USER_PROMPT_TEMPLATE.replace("{TEXT}", params.accumulatedFullText);
+      const assistantImgGenResult = await generateImage({
+        history: sanitizedAssistantHistoryForImage,
+        latestMessageText: prompt,
+        latestMessageRole: 'user',
+        systemInstruction: IMAGE_GEN_SYSTEM_INSTRUCTION,
+        maestroAvatarUri: maestroAvatarUriRef.current || undefined,
+        maestroAvatarMimeType: maestroAvatarMimeTypeRef.current || undefined,
+      });
+
+      if ('base64Image' in assistantImgGenResult) {
+        const duration = Date.now() - assistantStartTime;
+        setImageLoadDurations(prev => [...prev, duration]);
+        try {
+          const { optimized, upload } = await optimizeAndUploadMedia({
+            dataUrl: assistantImgGenResult.base64Image as string,
+            mimeType: assistantImgGenResult.mimeType as string,
+            displayName: 'assistant-generated',
+            setUploadPrepLabel: false,
+          });
+
+          updateMessage(params.thinkingMessageId, {
+            imageUrl: assistantImgGenResult.base64Image,
+            imageMimeType: assistantImgGenResult.mimeType,
+            llmImageUrl: optimized.dataUrl,
+            llmImageMimeType: optimized.mimeType,
+            llmFileUri: upload.uri,
+            llmFileMimeType: upload.mimeType,
+            isGeneratingImage: false,
+            imageGenError: null,
+            imageGenerationStartTime: undefined
+          });
+        } catch (e) {
+          updateMessage(params.thinkingMessageId, {
+            imageUrl: assistantImgGenResult.base64Image,
+            imageMimeType: assistantImgGenResult.mimeType,
+            isGeneratingImage: false,
+            imageGenError: null,
+            imageGenerationStartTime: undefined
+          });
+        }
+        break;
+      } else if (attempt < 2) {
+        await new Promise(r => setTimeout(r, 1500));
+      } else {
+        updateMessage(params.thinkingMessageId, {
+          imageGenError: (assistantImgGenResult as any).error,
+          isGeneratingImage: false,
+          imageGenerationStartTime: undefined
+        });
+      }
+    }
+  }, [
+    computeMaxMessagesForArray,
+    ensureUrisForHistoryForSend,
+    generateImage,
+    getHistoryRespectingBookmark,
+    maestroAvatarMimeTypeRef,
+    maestroAvatarUriRef,
+    messagesRef,
+    optimizeAndUploadMedia,
+    resolveBookmarkContextSummary,
+    setImageLoadDurations,
+    setSendPrep,
+    t,
+    updateMessage,
+  ]);
 
 
   // Main send message handler
@@ -722,104 +1117,24 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     }
     pendingRecordedAudioMessageRef.current = null;
 
-    let userMessageId: string | null = null;
-    let userMessageText = sanitizedText;
-    let recordedSpeechForMessage: RecordedUtterance | null = null;
-    let userImageToProcessBase64: string | undefined = (typeof passedImageBase64 === 'string' && passedImageBase64) ? passedImageBase64 : undefined;
-    let userImageToProcessMimeType: string | undefined = (typeof passedImageMimeType === 'string' && passedImageMimeType) ? passedImageMimeType : undefined;
-    let userImageToProcessLlmBase64: string | undefined = undefined;
-    let userImageToProcessLlmMimeType: string | undefined = undefined;
     const currentSettingsVal = settingsRef.current;
-
     const shouldGenerateUserImage = currentSettingsVal.selectedCameraId === IMAGE_GEN_CAMERA_ID;
-
-    if (messageType === 'user') {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const claimed = typeof claimRecordedUtterance === 'function' ? claimRecordedUtterance() : null;
-        if (claimed && typeof claimed.dataUrl === 'string' && claimed.dataUrl.length > 0) {
-          recordedSpeechForMessage = claimed;
-          recordedUtterancePendingRef.current = null;
-          break;
-        }
-        if (recordedUtterancePendingRef.current && typeof recordedUtterancePendingRef.current.dataUrl === 'string' && recordedUtterancePendingRef.current.dataUrl.length > 0) {
-          recordedSpeechForMessage = recordedUtterancePendingRef.current;
-          recordedUtterancePendingRef.current = null;
-          break;
-        }
-        if (attempt === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 60));
-        }
-      }
-      if (recordedSpeechForMessage && recordedSpeechForMessage.dataUrl.length > INLINE_CAP_AUDIO) {
-        recordedSpeechForMessage = null;
-      }
-    }
-
-    if (currentSettingsVal.sendWithSnapshotEnabled && !userImageToProcessBase64 && messageType === 'user' && !shouldGenerateUserImage) {
-      const snapshotResult = await captureSnapshot(false);
-      if (snapshotResult) {
-        userImageToProcessBase64 = snapshotResult.base64;
-        userImageToProcessMimeType = snapshotResult.mimeType;
-        userImageToProcessLlmBase64 = snapshotResult.llmBase64;
-        userImageToProcessLlmMimeType = snapshotResult.llmMimeType;
-      }
-    }
-
-    if (messageType === 'user') {
-      // Handle video keyframe extraction
-      const keyframeSrcBase64 = (typeof passedImageBase64 === 'string' && passedImageBase64) ? passedImageBase64 : attachedImageBase64;
-      const keyframeSrcMime = (typeof passedImageMimeType === 'string' && passedImageMimeType) ? passedImageMimeType : attachedImageMimeType;
-      if (keyframeSrcBase64 && keyframeSrcMime && keyframeSrcMime.startsWith('video/')) {
-        try {
-          const kf = await createKeyframeFromVideoDataUrl(keyframeSrcBase64, { at: 'start', maxDim: 768, quality: 0.75, outputMime: 'image/jpeg' });
-          const kfId = addMessage({ role: 'user', text: userMessageText, imageUrl: kf.dataUrl, imageMimeType: kf.mimeType });
-          try {
-            if (!sendWithFileUploadInProgressRef.current) {
-              sendWithFileUploadInProgressRef.current = true;
-            }
-            updateMessage(kfId, { llmImageUrl: kf.dataUrl, llmImageMimeType: kf.mimeType });
-            const up = await uploadMediaToFiles(kf.dataUrl, kf.mimeType, 'keyframe-image');
-            updateMessage(kfId, { llmFileUri: up.uri, llmFileMimeType: up.mimeType });
-          } catch (e) {
-            // Ignore upload errors for keyframe
-          }
-          userMessageText = '';
-          userImageToProcessBase64 = keyframeSrcBase64;
-          userImageToProcessMimeType = keyframeSrcMime;
-        } catch (e) {
-          console.warn('Failed to create keyframe from video; proceeding without keyframe image message', e);
-        }
-      }
-
-      if (!userImageToProcessLlmBase64 && attachedImageBase64 && attachedImageMimeType) {
-        try {
-          if (!sendWithFileUploadInProgressRef.current) {
-            sendWithFileUploadInProgressRef.current = true;
-          }
-           const optimized = await processMediaForUpload(attachedImageBase64, attachedImageMimeType, { t });
-           userImageToProcessLlmBase64 = optimized.dataUrl;
-           userImageToProcessLlmMimeType = optimized.mimeType;
-
-           if (userMessageId) {
-             updateMessage(userMessageId, {
-               llmImageUrl: optimized.dataUrl,
-               llmImageMimeType: optimized.mimeType,
-             });
-           }
-         } catch {}
-
-      }
-
-      userMessageId = addMessage({
-        role: 'user',
-        text: userMessageText,
-        recordedUtterance: recordedSpeechForMessage || undefined,
-        imageUrl: userImageToProcessBase64,
-        imageMimeType: userImageToProcessMimeType,
-        llmImageUrl: userImageToProcessLlmBase64,
-        llmImageMimeType: userImageToProcessLlmMimeType,
-      });
-    }
+    const userMessageContext = await createUserMessage({
+      sanitizedText,
+      passedImageBase64,
+      passedImageMimeType,
+      messageType,
+      shouldGenerateUserImage,
+      currentSettingsVal,
+    });
+    let {
+      userMessageId,
+      userMessageText,
+      userImageToProcessBase64,
+      userImageToProcessMimeType,
+      userImageToProcessLlmBase64,
+      userImageToProcessLlmMimeType,
+    } = userMessageContext;
 
     const thinkingMessageId = addMessage({ role: 'assistant', thinking: true });
 
@@ -999,115 +1314,38 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
       const sanitizedDerivedHistory = await sanitizeHistoryWithVerifiedUris(derivedHistory as any);
 
       // User image generation for AI Camera mode
-      if (shouldGenerateUserImage && currentSettingsVal.sendWithSnapshotEnabled && messageType === 'user' && userMessageText.trim() && userMessageId && !userImageToProcessBase64) {
-        const userImageGenStartTime = Date.now();
-        updateMessage(userMessageId, {
-          isGeneratingImage: true,
-          imageGenerationStartTime: userImageGenStartTime,
-          imageUrl: undefined,
-          imageMimeType: undefined,
-        });
-
-        const systemInstructionForUserImage = IMAGE_GEN_SYSTEM_INSTRUCTION;
-        const sanitizedUserHistoryForImage = sanitizedDerivedHistory as any;
-        let finalResult: any = null;
-        
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const prompt = IMAGE_GEN_USER_PROMPT_TEMPLATE.replace("{TEXT}", userMessageText);
-          const userImgGenResult = await generateImage({
-            history: sanitizedUserHistoryForImage,
-            latestMessageText: prompt,
-            latestMessageRole: 'user',
-            systemInstruction: systemInstructionForUserImage,
-            maestroAvatarUri: maestroAvatarUriRef.current || undefined,
-            maestroAvatarMimeType: maestroAvatarMimeTypeRef.current || undefined,
-          });
-          finalResult = userImgGenResult;
-          if ('base64Image' in userImgGenResult) break;
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
-        }
-
-        if (finalResult && 'base64Image' in finalResult) {
-          const duration = Date.now() - userImageGenStartTime;
-          setImageLoadDurations(prev => [...prev, duration]);
-          try {
-            const optimized = await processMediaForUpload(finalResult.base64Image as string, finalResult.mimeType as string, { t });
-            const lowResDataUrl = optimized.dataUrl;
-            const lowResMime = optimized.mimeType;
-
-            sendWithFileUploadInProgressRef.current = true;
-            setSendPrep(prev => (prev && prev.active ? { ...prev, label: t('chat.sendPrep.uploadingMedia') || 'Uploading media...' } : { active: true, label: t('chat.sendPrep.uploadingMedia') || 'Uploading media...' }));
-            const up = await uploadMediaToFiles(finalResult.base64Image as string, finalResult.mimeType as string, 'user-generated');
-
-            updateMessage(userMessageId, {
-              imageUrl: finalResult.base64Image,
-              imageMimeType: finalResult.mimeType,
-              llmImageUrl: lowResDataUrl,
-              llmImageMimeType: lowResMime,
-              llmFileUri: up.uri,
-              llmFileMimeType: up.mimeType,
-              isGeneratingImage: false,
-              imageGenError: null,
-              imageGenerationStartTime: undefined
-            });
-            imageForGeminiContextFileUri = up.uri;
-            imageForGeminiContextMimeType = up.mimeType;
-          } catch (e) {
-            updateMessage(userMessageId, {
-              imageUrl: finalResult.base64Image,
-              imageMimeType: finalResult.mimeType,
-              isGeneratingImage: false,
-              imageGenError: null,
-              imageGenerationStartTime: undefined
-            });
-          } finally {
-            setSendPrep(prev => (prev && prev.active ? { ...prev, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...' } : prev));
-          }
-        } else if (finalResult) {
-          updateMessage(userMessageId, {
-            imageGenError: (finalResult as any).error,
-            isGeneratingImage: false,
-            imageGenerationStartTime: undefined
-          });
-        }
+      const userImageContext = await runUserImageGeneration({
+        shouldGenerateUserImage,
+        currentSettingsVal,
+        messageType,
+        userMessageText,
+        userMessageId,
+        userImageToProcessBase64,
+        sanitizedDerivedHistory,
+      });
+      if (userImageContext.imageForGeminiContextFileUri) {
+        imageForGeminiContextFileUri = userImageContext.imageForGeminiContextFileUri;
+        imageForGeminiContextMimeType = userImageContext.imageForGeminiContextMimeType;
       }
 
-      const response = await generateGeminiResponse(
-        DEFAULT_TEXT_MODEL_ID,
+      const { accumulatedFullText, finalMessageUpdates } = await handleGeminiResponse({
+        thinkingMessageId,
         geminiPromptText,
         sanitizedDerivedHistory,
         systemInstructionForGemini,
-        undefined,
         imageForGeminiContextMimeType,
         imageForGeminiContextFileUri,
-        currentSettingsVal.enableGoogleSearch,
-        undefined
-      );
-
-      const accumulatedFullText = response.text || "";
-      const parsedTranslationsOnComplete = parseGeminiResponse(accumulatedFullText);
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks as GroundingChunk[] | undefined;
-      if (groundingChunks?.length) {
-        setLatestGroundingChunks(groundingChunks);
-      }
-
-      const finalMessageUpdates = {
-        thinking: false,
-        translations: parsedTranslationsOnComplete.length > 0 ? parsedTranslationsOnComplete : undefined,
-        rawAssistantResponse: accumulatedFullText,
-        text: parsedTranslationsOnComplete.length === 0 ? accumulatedFullText : undefined,
-      };
-      updateMessage(thinkingMessageId, finalMessageUpdates);
+        currentSettingsVal,
+      });
 
       // Early suggestion fetch
       try {
-        const textForSuggestionsEarly = finalMessageUpdates.rawAssistantResponse || (finalMessageUpdates.translations?.find(t => t.spanish)?.spanish) || "";
+        const textForSuggestionsEarly = finalMessageUpdates.rawAssistantResponse || (finalMessageUpdates.translations?.find(tr => tr.spanish)?.spanish) || "";
         if (!isLoadingSuggestionsRef.current && textForSuggestionsEarly.trim()) {
           const historyWithFinalAssistant = messagesRef.current.map(m =>
             m.id === thinkingMessageId ? ({ ...m, ...finalMessageUpdates }) : m
           );
-          fetchAndSetReplySuggestions(thinkingMessageId, textForSuggestionsEarly, getHistoryRespectingBookmark(historyWithFinalAssistant));
-          lastFetchedSuggestionsForRef.current = thinkingMessageId;
+          requestReplySuggestions(thinkingMessageId, textForSuggestionsEarly, getHistoryRespectingBookmark(historyWithFinalAssistant));
         }
       } catch (e) {
         console.warn('Failed to prefetch suggestions before TTS:', e);
@@ -1131,97 +1369,11 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
       await new Promise(resolve => setTimeout(resolve, 0));
 
       // Image generation for assistant response
-      if (currentSettingsVal.imageGenerationModeEnabled && accumulatedFullText.trim()) {
-        const assistantStartTime = Date.now();
-        updateMessage(thinkingMessageId, {
-          isGeneratingImage: true,
-          imageGenerationStartTime: assistantStartTime
-        });
-
-        let historyForAssistantImageGen: ChatMessage[] | undefined = undefined;
-        try {
-          sendWithFileUploadInProgressRef.current = true;
-          const baseForEnsure: ChatMessage[] = getHistoryRespectingBookmark(messagesRef.current);
-          setSendPrep({ active: true, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...', done: 0, total: 0 });
-          const ensuredUpdates = await ensureUrisForHistoryForSend(baseForEnsure, (done, total, etaMs) => {
-            setSendPrep({ active: true, label: t('chat.sendPrep.preparingMedia') || 'Preparing media...', done, total, etaMs });
-          });
-          historyForAssistantImageGen = baseForEnsure.map(m => {
-            const upd = ensuredUpdates[m.id];
-            if (upd && upd.newUri && (m as any).llmFileUri !== upd.newUri) {
-              return { ...m, llmFileUri: upd.newUri } as ChatMessage;
-            }
-            return m;
-          });
-          await new Promise(r => setTimeout(r, 0));
-        } catch { /* ignore */ }
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const histForAssistantImgBase = historyForAssistantImageGen || getHistoryRespectingBookmark(messagesRef.current);
-          let gpTextForAssistant: string | undefined = undefined;
-          try {
-            const gp3 = await getGlobalProfileDB();
-            gpTextForAssistant = gp3?.text || undefined;
-          } catch {}
-
-          const assistantHistory = deriveHistoryForApi(histForAssistantImgBase, {
-            maxMessages: computeMaxMessagesForArray(getHistoryRespectingBookmark(messagesRef.current).filter((m: ChatMessage) => m.role === 'user' || m.role === 'assistant')),
-            maxMediaToKeep: MAX_MEDIA_TO_KEEP,
-            contextSummary: resolveBookmarkContextSummary() || undefined,
-            globalProfileText: gpTextForAssistant,
-            placeholderLatestUserMessage: DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE,
-          });
-          const sanitizedAssistantHistoryForImage = await sanitizeHistoryWithVerifiedUris(assistantHistory as any);
-
-          const prompt = IMAGE_GEN_USER_PROMPT_TEMPLATE.replace("{TEXT}", accumulatedFullText);
-          const assistantImgGenResult = await generateImage({
-            history: sanitizedAssistantHistoryForImage,
-            latestMessageText: prompt,
-            latestMessageRole: 'user',
-            systemInstruction: IMAGE_GEN_SYSTEM_INSTRUCTION,
-            maestroAvatarUri: maestroAvatarUriRef.current || undefined,
-            maestroAvatarMimeType: maestroAvatarMimeTypeRef.current || undefined,
-          });
-
-          if ('base64Image' in assistantImgGenResult) {
-            const duration = Date.now() - assistantStartTime;
-            setImageLoadDurations(prev => [...prev, duration]);
-            try {
-              const optimized = await processMediaForUpload(assistantImgGenResult.base64Image as string, assistantImgGenResult.mimeType as string, { t });
-              const up = await uploadMediaToFiles(assistantImgGenResult.base64Image as string, assistantImgGenResult.mimeType as string, 'assistant-generated');
-
-              updateMessage(thinkingMessageId, {
-                imageUrl: assistantImgGenResult.base64Image,
-                imageMimeType: assistantImgGenResult.mimeType,
-                llmImageUrl: optimized.dataUrl,
-                llmImageMimeType: optimized.mimeType,
-                llmFileUri: up.uri,
-                llmFileMimeType: up.mimeType,
-                isGeneratingImage: false,
-                imageGenError: null,
-                imageGenerationStartTime: undefined
-              });
-            } catch (e) {
-              updateMessage(thinkingMessageId, {
-                imageUrl: assistantImgGenResult.base64Image,
-                imageMimeType: assistantImgGenResult.mimeType,
-                isGeneratingImage: false,
-                imageGenError: null,
-                imageGenerationStartTime: undefined
-              });
-            }
-            break;
-          } else if (attempt < 2) {
-            await new Promise(r => setTimeout(r, 1500));
-          } else {
-            updateMessage(thinkingMessageId, {
-              imageGenError: (assistantImgGenResult as any).error,
-              isGeneratingImage: false,
-              imageGenerationStartTime: undefined
-            });
-          }
-        }
-      }
+      await runAssistantImageGeneration({
+        thinkingMessageId,
+        accumulatedFullText,
+        currentSettingsVal,
+      });
 
       try {
         sendWithFileUploadInProgressRef.current = false;
@@ -1248,10 +1400,9 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
           !isLoadingSuggestionsRef.current &&
           finalAssistantMessage.id !== lastFetchedSuggestionsForRef.current) {
           const textForSuggestions = finalAssistantMessage.rawAssistantResponse ||
-            (finalAssistantMessage.translations?.find(t => t.spanish)?.spanish) || "";
+            (finalAssistantMessage.translations?.find(tr => tr.spanish)?.spanish) || "";
           if (textForSuggestions.trim()) {
-            fetchAndSetReplySuggestions(finalAssistantMessage.id, textForSuggestions, getHistoryRespectingBookmark(messagesRef.current));
-            lastFetchedSuggestionsForRef.current = finalAssistantMessage.id;
+            requestReplySuggestions(finalAssistantMessage.id, textForSuggestions, getHistoryRespectingBookmark(messagesRef.current));
           }
         }
       }
@@ -1296,7 +1447,9 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
       }
       setReplySuggestions([]);
       setIsLoadingSuggestions(false);
-      speechIsSpeakingRef.current = false;
+      if (isMountedRef.current) {
+        speechIsSpeakingRef.current = false;
+      }
       return false;
     }
   }, [
@@ -1307,15 +1460,17 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     selectedLanguagePairRef,
     messagesRef,
     isLoadingHistoryRef,
-    captureSnapshot,
+    createUserMessage,
     cancelReengagementRef,
     scheduleReengagementRef,
     getHistoryRespectingBookmark,
     computeMaxMessagesForArray,
     ensureUrisForHistoryForSend,
     resolveBookmarkContextSummary,
-    fetchAndSetReplySuggestions,
-    parseGeminiResponse,
+    handleGeminiResponse,
+    runUserImageGeneration,
+    runAssistantImageGeneration,
+    requestReplySuggestions,
     stripBracketedContent,
     speakMessage,
     isSpeechSynthesisSupported,
@@ -1324,9 +1479,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     startListening,
     clearTranscript,
     hasPendingQueueItems,
-    claimRecordedUtterance,
     sttInterruptedBySendRef,
-    recordedUtterancePendingRef,
     pendingRecordedAudioMessageRef,
     speechIsSpeakingRef,
     currentSystemPromptText,
@@ -1334,6 +1487,12 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     attachedImageMimeType,
     setAttachedImageBase64,
     setAttachedImageMimeType,
+    setIsLoadingSuggestions,
+    setIsSending,
+    setLatestGroundingChunks,
+    setReplySuggestions,
+    setSendPrep,
+    setSnapshotUserError,
     transcript,
     lastFetchedSuggestionsForRef,
   ]);

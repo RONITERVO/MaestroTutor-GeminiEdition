@@ -80,7 +80,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reje
 export function useGeminiLiveConversation(
   callbacks: UseGeminiLiveConversationCallbacks = {}
 ) {
-  const [_state, setState] = useState<LiveSessionState>('idle');
+  const [, setState] = useState<LiveSessionState>('idle');
   
   const sessionRef = useRef<any>(null);
   const frameIntervalRef = useRef<number | null>(null);
