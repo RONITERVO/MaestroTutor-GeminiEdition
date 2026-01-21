@@ -15,8 +15,8 @@ import type { ChatMessage, AppSettings } from '../../core/types';
 import type { TranslationFunction } from './useTranslations';
 
 // --- Services ---
-import { safeSaveChatHistoryDB, getAllChatHistoriesDB, getAllChatMetasDB, clearAndSaveAllHistoriesDB, getChatHistoryDB } from '../../features/chat/services/chatHistory';
-import { getGlobalProfileDB } from '../../features/session/services/globalProfile';
+import { safeSaveChatHistoryDB, getAllChatHistoriesDB, getAllChatMetasDB, clearAndSaveAllHistoriesDB, getChatHistoryDB } from '../../features/chat';
+import { getGlobalProfileDB } from '../../features/session';
 import { getLoadingGifsDB as getAssetsLoadingGifs, setLoadingGifsDB as setAssetsLoadingGifs, getMaestroProfileImageDB, setMaestroProfileImageDB } from '../../core/db/assets';
 
 // --- Config ---

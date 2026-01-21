@@ -1,7 +1,16 @@
 // Copyright 2025 Roni Tervo
 //
 // SPDX-License-Identifier: Apache-2.0
-import { useState, useCallback, useRef, useEffect } from 'react';
+/**
+ * useUiBusyState - Hook bridge to Zustand store for UI busy state
+ * 
+ * This hook provides backward-compatible access to UI busy state.
+ * All state is now managed by the uiSlice in the Zustand store.
+ */
+
+import { useCallback, useRef, useEffect } from 'react';
+import { useShallow } from 'zustand/shallow';
+import { useMaestroStore } from '../../store';
 
 export interface UseUiBusyStateReturn {
   /** Array of unique task tags currently active */
@@ -24,59 +33,61 @@ export interface UseUiBusyStateReturn {
 
 /**
  * Hook for managing UI busy state and task tracking.
- * Tracks active tasks that should block or influence UI behavior.
+ * Now backed by Zustand store - this is a thin wrapper for backward compatibility.
  */
 export const useUiBusyState = (): UseUiBusyStateReturn => {
-  const uiBusyTokensRef = useRef<Set<string>>(new Set());
+  // Select state from store
+  const { uiBusyTaskTags: uiBusyTaskTagsSet, externalUiTaskCount } = useMaestroStore(
+    useShallow(state => ({
+      uiBusyTaskTags: state.uiBusyTaskTags,
+      externalUiTaskCount: state.externalUiTaskCount,
+    }))
+  );
+
+  // Get actions from store (stable references)
+  const storeAddUiBusyToken = useMaestroStore(state => state.addUiBusyToken);
+  const storeRemoveUiBusyToken = useMaestroStore(state => state.removeUiBusyToken);
+
+  // Local ref for hold token
   const holdUiTokenRef = useRef<string | null>(null);
-  const externalUiTaskCountRef = useRef<number>(0);
+  const externalUiTaskCountRef = useRef<number>(externalUiTaskCount);
 
-  const [uiBusyTaskTags, setUiBusyTaskTags] = useState<string[]>([]);
-  const [externalUiTaskCount, setExternalUiTaskCount] = useState<number>(0);
-
-  const recomputeUiBusyState = useCallback(() => {
-    const tags: string[] = [];
-    let nonReengagementCount = 0;
-    uiBusyTokensRef.current.forEach(tok => {
-      const tag = tok.split(':')[0];
-      if (tag) tags.push(tag);
-      if (!tok.startsWith('reengage-')) nonReengagementCount++;
-    });
-    const uniqTags = Array.from(new Set(tags));
-    setUiBusyTaskTags(uniqTags);
-    setExternalUiTaskCount(nonReengagementCount);
-  }, []);
-
+  // Keep ref in sync
   useEffect(() => {
     externalUiTaskCountRef.current = externalUiTaskCount;
   }, [externalUiTaskCount]);
 
-  const addUiBusyToken = useCallback((token: string): string => {
-    uiBusyTokensRef.current.add(token);
-    recomputeUiBusyState();
-    return token;
-  }, [recomputeUiBusyState]);
+  // Convert Set to array of unique tags for backward compatibility
+  const uiBusyTaskTags = Array.from(uiBusyTaskTagsSet).map(tok => {
+    const tag = (tok as string).split(':')[0];
+    return tag;
+  }).filter((tag, idx, arr) => arr.indexOf(tag) === idx);
+
+  // Wrapper for addUiBusyToken that uses the tag directly as token prefix
+  const addUiBusyToken = useCallback((tag: string): string => {
+    // The store generates a unique token with timestamp
+    return storeAddUiBusyToken(tag);
+  }, [storeAddUiBusyToken]);
 
   const removeUiBusyToken = useCallback((token?: string | null) => {
     if (!token) return;
-    uiBusyTokensRef.current.delete(token);
-    recomputeUiBusyState();
-  }, [recomputeUiBusyState]);
+    storeRemoveUiBusyToken(token);
+  }, [storeRemoveUiBusyToken]);
 
   const clearUiBusyTokens = useCallback(() => {
-    uiBusyTokensRef.current.clear();
-    recomputeUiBusyState();
-  }, [recomputeUiBusyState]);
+    // Clear all tokens by getting current set and removing each
+    const state = useMaestroStore.getState();
+    state.uiBusyTaskTags.forEach(token => {
+      storeRemoveUiBusyToken(token);
+    });
+  }, [storeRemoveUiBusyToken]);
 
   const handleToggleHold = useCallback(() => {
     if (holdUiTokenRef.current) {
       removeUiBusyToken(holdUiTokenRef.current);
       holdUiTokenRef.current = null;
     } else {
-      const uniqueId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : String(Date.now());
-      const token = addUiBusyToken(`user-hold:${uniqueId}`);
+      const token = addUiBusyToken('user-hold');
       holdUiTokenRef.current = token;
     }
   }, [addUiBusyToken, removeUiBusyToken]);
