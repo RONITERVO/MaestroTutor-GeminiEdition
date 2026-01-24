@@ -21,7 +21,7 @@ import {
   RecordedUtterance,
   TtsAudioCacheEntry 
 } from '../../../core/types';
-import { useGeminiLiveConversation, LiveSessionState, pcmToWav, splitPcmBySilence } from '../../speech';
+import { useGeminiLiveConversation, LiveSessionState, pcmToWav } from '../../speech';
 import { sanitizeHistoryWithVerifiedUris, uploadMediaToFiles } from '../../../api/gemini/files';
 import { generateImage } from '../../../api/gemini/vision';
 import { getGlobalProfileDB } from '../../session';
@@ -249,12 +249,17 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
 
   /**
    * Handle a completed live turn (user spoke, model responded)
+   * @param userText - Transcribed user speech
+   * @param modelText - Transcribed model response
+   * @param userAudioPcm - User's recorded audio (16kHz)
+   * @param modelAudioLines - Model audio pre-split by transcript newlines (24kHz).
+   *                          Each element corresponds to a line in modelText.
    */
   const handleLiveTurnComplete = useCallback(async (
     userText: string, 
     modelText: string, 
     userAudioPcm?: Int16Array, 
-    modelAudioPcm?: Int16Array
+    modelAudioLines?: Int16Array[]
   ) => {
     let userMessageId = '';
     
@@ -356,39 +361,73 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
             timestamp: Date.now()
           } as ChatMessage);
 
-          // Now apply audio caching if we have chunks
-          if (modelAudioPcm && modelAudioPcm.length > 0) {
+          // ============================================================================
+          // AUDIO-TO-TEXT ALIGNMENT FOR GOOGLE LIVE API
+          // ============================================================================
+          // 
+          // KNOWN BEHAVIOR (as of Jan 2026):
+          // Google's Live API transcript includes short intro lines (e.g., "¡Perfecto!" / 
+          // "Täydellistä!") that are transcribed but NOT included in the audio stream.
+          // The audio segments start AFTER these intro lines, causing an offset.
+          //
+          // Example:
+          //   Transcript: "¡Perfecto!", "Täydellistä!", "Describiste...", "Kuvasit..."  (8 lines)
+          //   Audio:      [segment for "Describiste..."], [segment for "Kuvasit..."]   (6 segments)
+          //   Offset:     8 - 6 = 2 → skip first 2 text lines when mapping audio
+          //
+          // TO REVERT (if Google fixes this behavior):
+          //   Set ENABLE_LIVE_AUDIO_TEXT_OFFSET_COMPENSATION = false below.
+          //   This will use 1:1 mapping (audio[0] → text[0], audio[1] → text[1], etc.)
+          // ============================================================================
+          
+          // Toggle this to false if Google Live API starts including all lines in audio
+          const ENABLE_LIVE_AUDIO_TEXT_OFFSET_COMPENSATION = true;
+          
+          if (modelAudioLines && modelAudioLines.length > 0) {
             const targetLang = getPrimaryCode(selectedLanguagePairRef.current.targetLanguageCode);
             const nativeLang = getPrimaryCode(selectedLanguagePairRef.current.nativeLanguageCode);
-            const chunks = splitPcmBySilence(modelAudioPcm, 24000, 400);
             
-            let flatIndex = 0;
-            translations.forEach((pair) => {
-              // Target Line
-              if (pair.target && flatIndex < chunks.length) {
-                const key = computeTtsCacheKey(pair.target, targetLang, 'gemini');
-                upsertMessageTtsCache(assistantId, {
-                  key,
-                  langCode: targetLang,
-                  provider: 'gemini',
-                  audioDataUrl: pcmToWav(chunks[flatIndex], 24000),
-                  updatedAt: Date.now()
-                });
-                flatIndex++;
-              }
-              // Native Line
-              if (pair.native && flatIndex < chunks.length) {
-                const key = computeTtsCacheKey(pair.native, nativeLang, 'gemini');
-                upsertMessageTtsCache(assistantId, {
-                  key,
-                  langCode: nativeLang,
-                  provider: 'gemini',
-                  audioDataUrl: pcmToWav(chunks[flatIndex], 24000),
-                  updatedAt: Date.now()
-                });
-                flatIndex++;
-              }
+            // Flatten translations to a linear list of text lines with their languages
+            const textLines: Array<{text: string; lang: string}> = [];
+            translations.forEach(pair => {
+              if (pair.target) textLines.push({ text: pair.target, lang: targetLang });
+              if (pair.native) textLines.push({ text: pair.native, lang: nativeLang });
             });
+            
+            // Calculate offset: intro lines in transcript that have no audio
+            // When disabled, offset = 0 for direct 1:1 mapping
+            const offset = ENABLE_LIVE_AUDIO_TEXT_OFFSET_COMPENSATION
+              ? Math.max(0, textLines.length - modelAudioLines.length)
+              : 0;
+            
+            if (offset > 0) {
+              const skippedLines = textLines.slice(0, offset).map(l => l.text).join(' / ');
+              console.debug(
+                `[Live] Audio-text offset: ${offset} intro text lines without audio. ` +
+                `Skipped: "${skippedLines.substring(0, 80)}${skippedLines.length > 80 ? '...' : ''}"`
+              );
+            } else if (textLines.length !== modelAudioLines.length) {
+              console.debug(
+                `[Live] Audio-text count: ${modelAudioLines.length} audio segments for ${textLines.length} text lines.`
+              );
+            }
+            
+            // Map audio segments to text lines, applying offset if enabled
+            for (let i = 0; i < modelAudioLines.length && (i + offset) < textLines.length; i++) {
+              const audioPcm = modelAudioLines[i];
+              const textEntry = textLines[i + offset];
+              
+              if (audioPcm && audioPcm.length > 0 && textEntry) {
+                const key = computeTtsCacheKey(textEntry.text, textEntry.lang, 'gemini');
+                upsertMessageTtsCache(assistantId, {
+                  key,
+                  langCode: textEntry.lang,
+                  provider: 'gemini',
+                  audioDataUrl: pcmToWav(audioPcm, 24000),
+                  updatedAt: Date.now()
+                });
+              }
+            }
           }
 
           updateMessage(assistantId, {

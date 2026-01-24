@@ -7,7 +7,16 @@ export type LiveSessionState = 'idle' | 'connecting' | 'active' | 'error';
 export interface UseGeminiLiveConversationCallbacks {
   onStateChange?: (state: LiveSessionState) => void;
   onError?: (message: string) => void;
-  onTurnComplete?: (userText: string, modelText: string, userAudioPcm?: Int16Array, modelAudioPcm?: Int16Array) => void;
+  /**
+   * Called when a turn completes with consolidated transcripts and audio.
+   * @param userText - The user's transcribed speech
+   * @param modelText - The model's transcribed response
+   * @param userAudioPcm - Optional user audio as Int16Array (16kHz)
+   * @param modelAudioLines - Optional array of model audio segments (24kHz), split by transcript newlines.
+   *                          Each element corresponds to a line in modelText (target line, then native translation line).
+   *                          Splitting accounts for delay between audio arrival and transcript appearance.
+   */
+  onTurnComplete?: (userText: string, modelText: string, userAudioPcm?: Int16Array, modelAudioLines?: Int16Array[]) => void;
 }
 
 const CAPTURE_WORKLET_NAME = 'gemini-live-mic-capture';
@@ -82,7 +91,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reje
  * @param callbacks - Optional handlers:
  *   - onStateChange(state): invoked when the session state changes ('idle' | 'connecting' | 'active' | 'error')
  *   - onError(message): invoked with an error message when the session encounters an error
- *   - onTurnComplete(userText, modelText, userAudioPcm?, modelAudioPcm?): invoked when an exchange completes with consolidated transcripts and optional Int16Array PCM audio for user and model
+ *   - onTurnComplete(userText, modelText, userAudioPcm?, modelAudioLines?): invoked when an exchange completes with consolidated transcripts and optional Int16Array PCM audio for user and model
  * @returns An object with:
  *   - start(opts): begins a live session using the provided media stream and optional `systemInstruction` and `videoElement`
  *   - stop(): stops the session and releases all audio/video resources and internal state
@@ -109,6 +118,13 @@ export function useGeminiLiveConversation(
   const currentOutputTranscriptionRef = useRef<string>('');
   const currentUserAudioChunksRef = useRef<Int16Array[]>([]);
   const currentModelAudioChunksRef = useRef<Int16Array[]>([]);
+  
+  // Audio-Transcript Synchronization Tracking
+  // These track the correlation between streaming audio and delayed transcripts
+  // Split points are recorded when newlines appear in transcript, using current audio length
+  const currentModelAudioTotalLengthRef = useRef<number>(0);
+  const modelAudioSplitPointsRef = useRef<number[]>([]);
+  const lastNewlineCountRef = useRef<number>(0);
 
   const callbacksRef = useRef(callbacks);
   useEffect(() => { callbacksRef.current = callbacks; }, [callbacks]);
@@ -180,6 +196,9 @@ export function useGeminiLiveConversation(
     currentOutputTranscriptionRef.current = '';
     currentUserAudioChunksRef.current = [];
     currentModelAudioChunksRef.current = [];
+    currentModelAudioTotalLengthRef.current = 0;
+    modelAudioSplitPointsRef.current = [];
+    lastNewlineCountRef.current = 0;
   }, [stopAllAudio]);
 
   const ensureCaptureWorklet = useCallback(async (ctx: AudioContext) => {
@@ -301,6 +320,8 @@ export function useGeminiLiveConversation(
                     // Accumulate raw PCM16 for turn handling
                     const pcm16 = base64ToInt16(inlineAudio);
                     currentModelAudioChunksRef.current.push(pcm16);
+                    // Track total audio sample count for transcript-synchronized splitting
+                    currentModelAudioTotalLengthRef.current += pcm16.length;
 
                     const ctx = outputAudioContextRef.current;
                     const buffer = await decodePcm16ToAudioBuffer(base64ToUint8(inlineAudio), ctx, OUTPUT_SAMPLE_RATE, 1);
@@ -317,12 +338,29 @@ export function useGeminiLiveConversation(
                  }
              }
 
-             // 2. Handle Transcript Accumulation
+             // 2. Handle Transcript Accumulation & Split Point Detection
              if (msg.serverContent?.inputTranscription?.text) {
                currentInputTranscriptionRef.current += msg.serverContent.inputTranscription.text;
              }
              if (msg.serverContent?.outputTranscription?.text) {
-               currentOutputTranscriptionRef.current += msg.serverContent.outputTranscription.text;
+               const textPart = msg.serverContent.outputTranscription.text;
+               currentOutputTranscriptionRef.current += textPart;
+               
+               // Detect new newlines to mark audio split points
+               // Transcripts arrive with delay after audio, so we record the current
+               // accumulated audio length as the split boundary when a newline appears.
+               // This naturally accounts for the audio-ahead-of-transcript timing.
+               const currentText = currentOutputTranscriptionRef.current;
+               const newlineCount = (currentText.match(/\n/g) || []).length;
+               
+               if (newlineCount > lastNewlineCountRef.current) {
+                 const diff = newlineCount - lastNewlineCountRef.current;
+                 for (let i = 0; i < diff; i++) {
+                   // Mark split point at current audio accumulation position
+                   modelAudioSplitPointsRef.current.push(currentModelAudioTotalLengthRef.current);
+                 }
+                 lastNewlineCountRef.current = newlineCount;
+               }
              }
 
              // 3. Handle Turn Completion (Exchange Finished)
@@ -330,7 +368,7 @@ export function useGeminiLiveConversation(
                 const userText = currentInputTranscriptionRef.current.trim();
                 const modelText = currentOutputTranscriptionRef.current.trim();
                 
-                // Consolidate Audio
+                // Consolidate User Audio
                 let userAudioFull = mergeInt16Arrays(currentUserAudioChunksRef.current);
                 
                 // Trim silence from user audio to avoid saving dead air
@@ -338,23 +376,54 @@ export function useGeminiLiveConversation(
                     userAudioFull = trimSilence(userAudioFull, INPUT_SAMPLE_RATE);
                 }
 
+                // Consolidate and Split Model Audio by transcript newlines
                 const modelAudioFull = mergeInt16Arrays(currentModelAudioChunksRef.current);
+                const modelAudioLines: Int16Array[] = [];
+                
+                if (modelAudioSplitPointsRef.current.length > 0 && modelAudioFull.length > 0) {
+                    let startSample = 0;
+                    // Ensure unique sorted split points within bounds
+                    const points = [...new Set(modelAudioSplitPointsRef.current)]
+                        .sort((a, b) => a - b)
+                        .filter(p => p > 0 && p < modelAudioFull.length);
+                    
+                    for (const point of points) {
+                        if (point > startSample) {
+                            modelAudioLines.push(modelAudioFull.slice(startSample, point));
+                            startSample = point;
+                        }
+                    }
+                    // Add remainder as final segment
+                    if (startSample < modelAudioFull.length) {
+                        modelAudioLines.push(modelAudioFull.slice(startSample));
+                    }
+                } else if (modelAudioFull.length > 0) {
+                    // No newlines detected, one single audio block
+                    modelAudioLines.push(modelAudioFull);
+                }
 
                 if (userText || modelText) {
-                    callbacksRef.current.onTurnComplete?.(userText, modelText, userAudioFull, modelAudioFull);
+                    callbacksRef.current.onTurnComplete?.(userText, modelText, userAudioFull, modelAudioLines);
                 }
-                // Reset accumulators for next turn
+                // Reset all accumulators for next turn
                 currentInputTranscriptionRef.current = '';
                 currentOutputTranscriptionRef.current = '';
                 currentUserAudioChunksRef.current = [];
                 currentModelAudioChunksRef.current = [];
+                currentModelAudioTotalLengthRef.current = 0;
+                modelAudioSplitPointsRef.current = [];
+                lastNewlineCountRef.current = 0;
              }
 
              // 4. Handle Interruption
              if (msg.serverContent?.interrupted) {
                  stopAllAudio();
-                 currentOutputTranscriptionRef.current = ''; 
+                 // Reset model output accumulators and sync tracking
+                 currentOutputTranscriptionRef.current = '';
                  currentModelAudioChunksRef.current = [];
+                 currentModelAudioTotalLengthRef.current = 0;
+                 modelAudioSplitPointsRef.current = [];
+                 lastNewlineCountRef.current = 0;
              }
           },
           onclose: () => {
