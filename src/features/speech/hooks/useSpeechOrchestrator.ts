@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 /**
- * useSpeechController - Hook for orchestrating speech (TTS/STT) functionality.
+ * useSpeechOrchestrator - Hook for orchestrating speech (TTS/STT) functionality.
  * 
  * Wraps useBrowserSpeech and adds caching, message speaking, etc.
  * Manages activity tokens for unified busy state tracking via uiSlice.
@@ -12,7 +12,7 @@
  * - 'stt:listen' - STT is actively listening
  */
 
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   ChatMessage, 
   SpeechPart, 
@@ -20,31 +20,38 @@ import {
   RecordedUtterance, 
   ReplySuggestion,
   LanguagePair 
-} from '../../core/types';
-import { useBrowserSpeech } from '../../features/speech';
-import { getPrimaryCode } from '../../shared/utils/languageUtils';
-import { INLINE_CAP_AUDIO, computeTtsCacheKey, getCachedAudioForKey } from '../../features/chat';
-import { TOKEN_CATEGORY, TOKEN_SUBTYPE } from '../../core/config/activityTokens';
-import { useMaestroStore } from '../../store';
+} from '../../../core/types';
+import useBrowserSpeech from './useBrowserSpeech';
+import { getPrimaryCode } from '../../../shared/utils/languageUtils';
+import { INLINE_CAP_AUDIO, computeTtsCacheKey, getCachedAudioForKey } from '../../chat';
+import { TOKEN_CATEGORY, TOKEN_SUBTYPE } from '../../../core/config/activityTokens';
+import { useMaestroStore } from '../../../store';
+import { selectIsSending } from '../../../store/slices/uiSlice';
+import { selectSelectedLanguagePair } from '../../../store/slices/settingsSlice';
 
-export interface UseSpeechControllerConfig {
-  settingsRef: React.MutableRefObject<{
+export interface UseSpeechOrchestratorConfig {
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  settingsRef?: React.MutableRefObject<{
     stt: { enabled: boolean; language: string; provider?: 'browser' | 'gemini' };
     tts: { provider?: 'browser' | 'gemini'; speakNative: boolean };
     isSuggestionMode: boolean;
   }>;
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
-  selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
-  isSendingRef: React.MutableRefObject<boolean>;
-  lastFetchedSuggestionsForRef: React.MutableRefObject<string | null>;
-  /** Ref to suggestions - allows late binding after useMaestroController */
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  messagesRef?: React.MutableRefObject<ChatMessage[]>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  selectedLanguagePairRef?: React.MutableRefObject<LanguagePair | undefined>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  isSendingRef?: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
   replySuggestionsRef?: React.MutableRefObject<ReplySuggestion[]>;
   upsertMessageTtsCache: (messageId: string, entry: TtsAudioCacheEntry) => void;
   upsertSuggestionTtsCache: (messageId: string, suggestionIndex: number, entry: TtsAudioCacheEntry) => void;
   setMessages?: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }
 
-export interface UseSpeechControllerReturn {
+export interface UseSpeechOrchestratorReturn {
   // TTS State
   isSpeaking: boolean;
   speak: (textOrParts: string | SpeechPart[], defaultLang: string) => void;
@@ -80,14 +87,8 @@ export interface UseSpeechControllerReturn {
  * Wraps useBrowserSpeech and adds caching, message speaking, etc.
  * Manages activity tokens for unified busy state tracking.
  */
-export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeechControllerReturn => {
+export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseSpeechOrchestratorReturn => {
   const { 
-    settingsRef, 
-    messagesRef, 
-    selectedLanguagePairRef,
-    isSendingRef,
-    lastFetchedSuggestionsForRef,
-    replySuggestionsRef,
     upsertMessageTtsCache,
     upsertSuggestionTtsCache,
     setMessages,
@@ -101,9 +102,86 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
   const removeActivityToken = useMaestroStore(state => state.removeActivityToken);
 
   const speechIsSpeakingRef = useRef<boolean>(false);
-  const recordedUtterancePendingRef = useRef<RecordedUtterance | null>(null);
-  const pendingRecordedAudioMessageRef = useRef<string | null>(null);
-  const sttInterruptedBySendRef = useRef<boolean>(false);
+  const storeSetMessages = useMaestroStore(state => state.setMessages);
+  const setRecordedUtterancePending = useMaestroStore(state => state.setRecordedUtterancePending);
+  const setPendingRecordedAudioMessageId = useMaestroStore(state => state.setPendingRecordedAudioMessageId);
+  const setSttInterruptedBySend = useMaestroStore(state => state.setSttInterruptedBySend);
+  const applySetMessages = setMessages || storeSetMessages;
+
+  const settingsRef = useMemo<React.MutableRefObject<{
+    stt: { enabled: boolean; language: string; provider?: 'browser' | 'gemini' };
+    tts: { provider?: 'browser' | 'gemini'; speakNative: boolean };
+    isSuggestionMode: boolean;
+  }>>(() => ({
+    get current() {
+      return useMaestroStore.getState().settings;
+    },
+    set current(_value) {},
+  }), []);
+
+  const messagesRef = useMemo<React.MutableRefObject<ChatMessage[]>>(() => ({
+    get current() {
+      return useMaestroStore.getState().messages;
+    },
+    set current(_value) {},
+  }), []);
+
+  const selectedLanguagePairRef = useMemo<React.MutableRefObject<LanguagePair | undefined>>(() => ({
+    get current() {
+      return selectSelectedLanguagePair(useMaestroStore.getState());
+    },
+    set current(_value) {},
+  }), []);
+
+  const isSendingRef = useMemo<React.MutableRefObject<boolean>>(() => ({
+    get current() {
+      return selectIsSending(useMaestroStore.getState());
+    },
+    set current(_value) {},
+  }), []);
+
+  const lastFetchedSuggestionsForRef = useMemo<React.MutableRefObject<string | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().lastFetchedSuggestionsFor;
+    },
+    set current(value) {
+      useMaestroStore.getState().setLastFetchedSuggestionsFor(value);
+    },
+  }), []);
+
+  const replySuggestionsRef = useMemo<React.MutableRefObject<ReplySuggestion[]>>(() => ({
+    get current() {
+      return useMaestroStore.getState().replySuggestions;
+    },
+    set current(_value) {},
+  }), []);
+
+  const recordedUtterancePendingRef = useMemo<React.MutableRefObject<RecordedUtterance | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().recordedUtterancePending;
+    },
+    set current(value) {
+      setRecordedUtterancePending(value);
+    },
+  }), [setRecordedUtterancePending]);
+
+  const pendingRecordedAudioMessageRef = useMemo<React.MutableRefObject<string | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().pendingRecordedAudioMessageId;
+    },
+    set current(value) {
+      setPendingRecordedAudioMessageId(value);
+    },
+  }), [setPendingRecordedAudioMessageId]);
+
+  const sttInterruptedBySendRef = useMemo<React.MutableRefObject<boolean>>(() => ({
+    get current() {
+      return useMaestroStore.getState().sttInterruptedBySend;
+    },
+    set current(value) {
+      setSttInterruptedBySend(value);
+    },
+  }), [setSttInterruptedBySend]);
   
   // Track activity tokens for unified busy state management
   const speakingTokenRef = useRef<string | null>(null);
@@ -142,6 +220,9 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
         console.warn("STT cycle ended with error. STT will not automatically restart unless manually toggled.");
       }
     },
+    // Note: Empty dependency arrays are intentional and safe here because these refs
+    // are store-backed proxies where .current always reads fresh state from useMaestroStore.getState().
+    // This pattern ensures callbacks remain stable while always accessing current state.
     isGlobalSttEnabled: useCallback(() => settingsRef.current.stt.enabled, []),
     getGlobalSttLanguage: useCallback(() => settingsRef.current.stt.language, []),
     onSpeechQueueCompleted: useCallback(() => {
@@ -171,12 +252,12 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
       recordedUtterancePendingRef.current = utterance;
       // If there's a pending message waiting for this audio, attach it
       const pendingId = pendingRecordedAudioMessageRef.current;
-      if (pendingId && setMessages) {
+      if (pendingId) {
         pendingRecordedAudioMessageRef.current = null;
-        setMessages((prev) => prev.map((m) => (m.id === pendingId ? { ...m, recordedUtterance: utterance } : m)));
+        applySetMessages((prev) => prev.map((m) => (m.id === pendingId ? { ...m, recordedUtterance: utterance } : m)));
         recordedUtterancePendingRef.current = null;
       }
-    }, [setMessages])
+    }, [applySetMessages])
   });
 
   // Sync speech state to refs and manage activity tokens
@@ -302,17 +383,17 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
       if (message.translations && message.translations.length > 0) {
         if (settingsRef.current.tts.speakNative) {
           message.translations.forEach(pair => {
-            if (pair.spanish && pair.spanish.trim()) {
-              partsForTTS.push({ text: pair.spanish, langCode: targetLang, context: { source: 'message', messageId: message.id } });
+            if (pair.target && pair.target.trim()) {
+              partsForTTS.push({ text: pair.target, langCode: targetLang, context: { source: 'message', messageId: message.id } });
             }
-            if (pair.english && pair.english.trim()) {
-              partsForTTS.push({ text: pair.english, langCode: nativeLang, context: { source: 'message', messageId: message.id } });
+            if (pair.native && pair.native.trim()) {
+              partsForTTS.push({ text: pair.native, langCode: nativeLang, context: { source: 'message', messageId: message.id } });
             }
           });
         } else {
           message.translations.forEach(pair => {
-            if (pair.spanish && pair.spanish.trim()) {
-              partsForTTS.push({ text: pair.spanish, langCode: targetLang, context: { source: 'message', messageId: message.id } });
+            if (pair.target && pair.target.trim()) {
+              partsForTTS.push({ text: pair.target, langCode: targetLang, context: { source: 'message', messageId: message.id } });
             }
           });
         }
@@ -400,4 +481,4 @@ export const useSpeechController = (config: UseSpeechControllerConfig): UseSpeec
   };
 };
 
-export default useSpeechController;
+export default useSpeechOrchestrator;

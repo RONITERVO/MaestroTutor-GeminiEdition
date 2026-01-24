@@ -5,17 +5,15 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { MutableRefObject } from 'react';
+import { useMaestroStore } from '../../../store';
 
-interface UseSuggestionModeAutoRestartConfig {
+export interface UseSuggestionModeAutoRestartConfig {
   isListening: boolean;
-  settingsRef: MutableRefObject<{ stt: { enabled: boolean; language: string }; isSuggestionMode: boolean }>;
   startListening: (lang: string) => void;
 }
 
 export const useSuggestionModeAutoRestart = ({
   isListening,
-  settingsRef,
   startListening,
 }: UseSuggestionModeAutoRestartConfig) => {
   const prevIsListeningRef = useRef<boolean>(false);
@@ -32,12 +30,14 @@ export const useSuggestionModeAutoRestart = ({
     }
 
     if (wasListening && !isListening) {
-      if (settingsRef.current.isSuggestionMode && settingsRef.current.stt.enabled) {
+      const { settings } = useMaestroStore.getState();
+      if (settings.isSuggestionMode && settings.stt.enabled) {
         restartTimeoutRef.current = window.setTimeout(() => {
           restartTimeoutRef.current = null;
-          // Re-check conditions before starting - avoid re-entrancy
-          if (!isListening && settingsRef.current.stt.enabled && settingsRef.current.isSuggestionMode) {
-            startListening(settingsRef.current.stt.language);
+
+          const state = useMaestroStore.getState();
+          if (state.settings.stt.enabled && state.settings.isSuggestionMode) {
+            startListening(state.settings.stt.language);
           }
         }, 100);
       }
@@ -50,7 +50,7 @@ export const useSuggestionModeAutoRestart = ({
         restartTimeoutRef.current = null;
       }
     };
-  }, [isListening, settingsRef, startListening]);
+  }, [isListening, startListening]);
 };
 
 export default useSuggestionModeAutoRestart;

@@ -10,36 +10,25 @@
  * 3. Contains minimal business logic
  * 
  * The actual logic has been extracted into specialized hooks in src/app/hooks/
+ * and src/features/ /hooks.
  */
-import React, { useEffect, useCallback, useRef, useMemo } from 'react';
-import { useShallow } from 'zustand/shallow';
+ 
+import React, { useEffect, useCallback, useRef } from 'react';
 
 // --- Features Components ---
 import { ChatInterface } from '../features/chat';
 import { Header, useSmartReengagement } from '../features/session';
 import { DebugLogPanel } from '../features/diagnostics';
+import { VisualContextVideo } from '../features/vision';
 
 // --- Hooks ---
-import {
-  useTranslations,
-  useAppLifecycle,
-  useAppAssets,
-  useMaestroActivityStage,
-  useAutoSendOnSilence,
-  useAutoFetchSuggestions,
-  useSuggestionModeAutoRestart,
-  useIdleReengagement,
-  useLanguageSelectionController,
-  useAppSettings,
-  useChatStore,
-  useHardware,
-  useSpeechController,
-  useMaestroController,
-  useLiveSession,
-  useDataBackup,
-  MAX_VISIBLE_MESSAGES_DEFAULT,
-  useMaestroStore,
-} from './hooks';
+import { useAppInitialization, useMaestroActivityStage, useIdleReengagement } from './hooks';
+
+import { useTutorConversation, useSuggestions, useChatPersistence } from '../features/chat';
+import { useSpeechOrchestrator, useAutoSendOnSilence, useSuggestionModeAutoRestart } from '../features/speech';
+import { useCameraManager } from '../features/vision';
+import { useLiveSessionController } from '../features/live';
+import { MAX_VISIBLE_MESSAGES_DEFAULT, useMaestroStore } from '../store';
 
 // --- Feature Hooks ---
 // --- Services ---
@@ -47,12 +36,13 @@ import { setChatMetaDB } from '../features/chat';
 
 // --- Config ---
 import { IMAGE_GEN_CAMERA_ID } from '../core/config/app';
-import { TOKEN_CATEGORY, TOKEN_SUBTYPE } from '../core/config/activityTokens';
-import { ALL_LANGUAGES, DEFAULT_NATIVE_LANG_CODE, DEFAULT_TARGET_LANG_CODE } from '../core/config/languages';
 import { selectNonReengagementBusy } from '../store/slices/uiSlice';
 
 // --- Utils ---
 import { getPrimaryCode } from '../shared/utils/languageUtils';
+
+/** Delay in ms before restarting STT after language change */
+const STT_RESTART_DELAY_MS = 250;
 
 const App: React.FC = () => {
   // ============================================================
@@ -61,7 +51,9 @@ const App: React.FC = () => {
   
   // These refs are used for visual context capture state
   const isCurrentlyPerformingVisualContextCaptureRef = useRef(false);
-  const holdTokenRef = useRef<string | null>(null);
+  const bubbleWrapperRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const maestroAvatarUriRef = useRef<string | null>(null);
+  const maestroAvatarMimeTypeRef = useRef<string | null>(null);
 
   // ============================================================
   // HOOK COMPOSITION - The Controller Layer
@@ -73,34 +65,14 @@ const App: React.FC = () => {
   const removeActivityToken = useMaestroStore(state => state.removeActivityToken);
   const isBlockingActivity = useMaestroStore(selectNonReengagementBusy);
 
-  // --- Settings ---
   const {
+    t,
     settings,
     settingsRef,
     handleSettingsChange,
     setSettings,
-    languagePairs,
     selectedLanguagePair,
     selectedLanguagePairRef,
-    isSettingsLoaded,
-  } = useAppSettings();
-
-  // --- Translations ---
-  const nativeLangForTranslations = useMemo(() => {
-    if (selectedLanguagePair) {
-      return getPrimaryCode(selectedLanguagePair.nativeLanguageCode);
-    }
-    const browserLang = (typeof navigator !== 'undefined' ? navigator.language : 'en').substring(0, 2);
-    return browserLang || 'en';
-  }, [selectedLanguagePair]);
-
-  const { t } = useTranslations(nativeLangForTranslations);
-
-  useAppLifecycle(t);
-
-  // --- Chat Store ---
-  const {
-    messages,
     messagesRef,
     isLoadingHistory,
     isLoadingHistoryRef,
@@ -116,56 +88,30 @@ const App: React.FC = () => {
     replySuggestions,
     setReplySuggestions,
     replySuggestionsRef,
-    isLoadingSuggestions,
-    isLoadingSuggestionsRef,
-  } = useChatStore({
-    t,
-    selectedLanguagePairId: settings.selectedLanguagePairId,
+  } = useAppInitialization({
+    maestroAvatarUriRef,
+    maestroAvatarMimeTypeRef,
   });
+
+  useChatPersistence();
 
   // --- Hardware ---
   const {
-    availableCameras,
     availableCamerasRef,
-    currentCameraFacingMode,
     liveVideoStream,
     setLiveVideoStream,
     visualContextVideoRef,
     visualContextStreamRef,
-    visualContextCameraError,
-    snapshotUserError,
     setSnapshotUserError,
     captureSnapshot,
-    microphoneApiAvailable,
-  } = useHardware({
+  } = useCameraManager({
     t,
     sendWithSnapshotEnabled: settings.sendWithSnapshotEnabled,
     useVisualContext: settings.smartReengagement.useVisualContext,
     selectedCameraId: settings.selectedCameraId,
-    settingsRef,
   });
 
-  const {
-    isLanguageSelectionOpen,
-    tempNativeLangCode,
-    tempTargetLangCode,
-    languageSelectorLastInteraction,
-    isTopbarOpen,
-    loadingGifs,
-    transitioningImageId,
-  } = useMaestroStore(useShallow(state => ({
-    isLanguageSelectionOpen: state.isLanguageSelectionOpen,
-    tempNativeLangCode: state.tempNativeLangCode,
-    tempTargetLangCode: state.tempTargetLangCode,
-    languageSelectorLastInteraction: state.languageSelectorLastInteraction,
-    isTopbarOpen: state.isTopbarOpen,
-    loadingGifs: state.loadingGifs,
-    transitioningImageId: state.transitioningImageId,
-  })));
-
   const showDebugLogs = useMaestroStore(state => state.showDebugLogs);
-  const attachedImageBase64 = useMaestroStore(state => state.attachedImageBase64);
-  const attachedImageMimeType = useMaestroStore(state => state.attachedImageMimeType);
   const isUserActive = useMaestroStore(state => state.isUserActive);
   
   // Compute derived values in the selector to avoid Zustand getter issues
@@ -178,29 +124,15 @@ const App: React.FC = () => {
     return pair?.baseReplySuggestionsPrompt || '';
   });
 
-  const setIsLanguageSelectionOpen = useMaestroStore(state => state.setIsLanguageSelectionOpen);
-  const setTempNativeLangCode = useMaestroStore(state => state.setTempNativeLangCode);
-  const setTempTargetLangCode = useMaestroStore(state => state.setTempTargetLangCode);
-  const setIsTopbarOpen = useMaestroStore(state => state.setIsTopbarOpen);
-  const setLoadingGifs = useMaestroStore(state => state.setLoadingGifs);
   const setTransitioningImageId = useMaestroStore(state => state.setTransitioningImageId);
   const setShowDebugLogs = useMaestroStore(state => state.setShowDebugLogs);
-  const toggleDebugLogs = useMaestroStore(state => state.toggleDebugLogs);
   const setAttachedImage = useMaestroStore(state => state.setAttachedImage);
-  const setMaestroAvatar = useMaestroStore(state => state.setMaestroAvatar);
 
   // --- Refs ---
-  const bubbleWrapperRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const maestroAvatarUriRef = useRef<string | null>(null);
-  const maestroAvatarMimeTypeRef = useRef<string | null>(null);
   const STT_STABLE_NO_TEXT_MS = 4000;
 
-  useAppAssets({
-    setLoadingGifs,
-    setMaestroAvatar,
-    maestroAvatarUriRef,
-    maestroAvatarMimeTypeRef,
-  });
+  const attachedImageBase64 = useMaestroStore(state => state.attachedImageBase64);
+  const attachedImageMimeType = useMaestroStore(state => state.attachedImageMimeType);
 
   // Create a stable isSendingRef that will be shared across hooks
   const sharedIsSendingRef = useRef<boolean>(false);
@@ -218,14 +150,11 @@ const App: React.FC = () => {
     isSpeaking,
     stopSpeaking,
     isSpeechSynthesisSupported,
-    speakingUtteranceText,
     hasPendingQueueItems,
     isListening,
     transcript,
     startListening,
     stopListening,
-    sttError,
-    isSpeechRecognitionSupported,
     clearTranscript,
     claimRecordedUtterance,
     speechIsSpeakingRef,
@@ -234,7 +163,7 @@ const App: React.FC = () => {
     sttInterruptedBySendRef,
     speakMessage,
     speakWrapper,
-  } = useSpeechController({
+  } = useSpeechOrchestrator({
     settingsRef,
     messagesRef,
     selectedLanguagePairRef,
@@ -250,10 +179,6 @@ const App: React.FC = () => {
   const {
     isSending,
     isSendingRef,
-    sendPrep,
-    latestGroundingChunks,
-    maestroActivityStage,
-    isCreatingSuggestion,
     handleSendMessageInternal,
     handleSendMessageInternalRef,
     handleCreateSuggestion,
@@ -262,9 +187,8 @@ const App: React.FC = () => {
     parseGeminiResponse,
     resolveBookmarkContextSummary,
     computeHistorySubsetForMedia,
-    calculateEstimatedImageLoadTime,
     fetchAndSetReplySuggestions,
-  } = useMaestroController({
+  } = useTutorConversation({
     t,
     settingsRef,
     setSettings,
@@ -302,53 +226,25 @@ const App: React.FC = () => {
     setSnapshotUserError, // Pass hardware error setter
   });
 
-  const {
-    handleShowLanguageSelector,
-    handleTempNativeSelect,
-    handleTempTargetSelect,
-    handleConfirmLanguageSelection,
-  } = useLanguageSelectionController({
-    isSettingsLoaded,
-    settings,
-    settingsRef,
-    isSendingRef,
-    languagePairs,
-    handleSettingsChange,
-    messagesRef,
-    isLanguageSelectionOpen,
-    tempNativeLangCode,
-    tempTargetLangCode,
-    languageSelectorLastInteraction,
-    setIsLanguageSelectionOpen,
-    setTempNativeLangCode,
-    setTempTargetLangCode,
-  });
 
   const { clearAutoSend } = useAutoSendOnSilence({
-    settingsRef,
     transcript,
     attachedImageBase64,
     attachedImageMimeType,
-    isSendingRef,
-    speechIsSpeakingRef,
     clearTranscript,
     handleCreateSuggestion,
     handleSendMessageInternal,
     stableMs: STT_STABLE_NO_TEXT_MS,
   });
 
-  useAutoFetchSuggestions({
+  useSuggestions({
     isSpeaking,
-    messagesRef,
-    lastFetchedSuggestionsForRef,
-    isLoadingSuggestionsRef,
     fetchAndSetReplySuggestions,
     getHistoryRespectingBookmark,
   });
 
   useSuggestionModeAutoRestart({
     isListening,
-    settingsRef,
     startListening,
   });
 
@@ -455,14 +351,6 @@ const App: React.FC = () => {
     handleUserActivity();
   }, [clearAutoSend, handleUserActivity]);
 
-  const handleToggleHold = useCallback(() => {
-    if (holdTokenRef.current) {
-      removeActivityToken(holdTokenRef.current);
-      holdTokenRef.current = null;
-    } else {
-      holdTokenRef.current = addActivityToken(TOKEN_CATEGORY.UI, TOKEN_SUBTYPE.HOLD);
-    }
-  }, [addActivityToken, removeActivityToken]);
 
   const handleSetAttachedImage = useCallback((base64: string | null, mimeType: string | null) => {
     setAttachedImage(base64, mimeType);
@@ -504,7 +392,7 @@ const App: React.FC = () => {
           clearTranscript();
           startListening(newSttLang);
         }
-      }, 250);
+      }, STT_RESTART_DELAY_MS);
     } else if (langDidChange) {
       clearTranscript();
     }
@@ -546,21 +434,11 @@ const App: React.FC = () => {
           clearTranscript();
           startListening(langCode);
         }
-      }, 250);
+      }, STT_RESTART_DELAY_MS);
     } else {
       clearTranscript();
     }
   }, [isListening, stopListening, clearTranscript, startListening, settingsRef, setSettings]);
-
-  const toggleSttProvider = useCallback(() => {
-    const next = settings.stt.provider === 'browser' ? 'gemini' : 'browser';
-    handleSettingsChange('stt', { ...settings.stt, provider: next });
-  }, [settings.stt, handleSettingsChange]);
-
-  const toggleTtsProvider = useCallback(() => {
-    const next = settings.tts.provider === 'browser' ? 'gemini' : 'browser';
-    handleSettingsChange('tts', { ...settings.tts, provider: next });
-  }, [settings.tts, handleSettingsChange]);
 
   const handleToggleSendWithSnapshot = useCallback(() => {
     handleSettingsChange('sendWithSnapshotEnabled', !settingsRef.current.sendWithSnapshotEnabled);
@@ -617,11 +495,9 @@ const App: React.FC = () => {
   // ============================================================
 
   const {
-    liveSessionState,
-    liveSessionError,
     handleStartLiveSession,
     handleStopLiveSession,
-  } = useLiveSession({
+  } = useLiveSessionController({
     t,
     settingsRef,
     setSettings,
@@ -656,35 +532,6 @@ const App: React.FC = () => {
     maestroAvatarMimeTypeRef,
   });
 
-  // --- Data Backup ---
-  const {
-    handleSaveAllChats,
-    handleLoadAllChats,
-  } = useDataBackup({
-    t,
-    settingsRef,
-    messagesRef,
-    setMessages,
-    setLoadingGifs,
-    setTempNativeLangCode,
-    setTempTargetLangCode,
-    setIsLanguageSelectionOpen,
-  });
-
-  // ============================================================
-  // COMPUTED VALUES
-  // ============================================================
-
-  const [targetCode, nativeCode] = useMemo(() => 
-    (selectedLanguagePair ? selectedLanguagePair.id.split('-') : [DEFAULT_TARGET_LANG_CODE, DEFAULT_NATIVE_LANG_CODE]), 
-    [selectedLanguagePair]
-  );
-  const targetLanguageDef = useMemo(() => ALL_LANGUAGES.find(lang => lang.langCode === targetCode)!, [targetCode]);
-  const nativeLanguageDef = useMemo(() => ALL_LANGUAGES.find(lang => lang.langCode === nativeCode)!, [nativeCode]);
-
-  const activeSttProvider = settings.stt.provider || 'browser';
-  const browserSttAvailable = isSpeechRecognitionSupported;
-  const effectiveSttSupported = activeSttProvider === 'browser' ? browserSttAvailable : microphoneApiAvailable;
 
   // ============================================================
   // RENDER
@@ -703,24 +550,12 @@ const App: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen antialiased text-gray-800 bg-gray-100">
-      <Header
-        isTopbarOpen={isTopbarOpen}
-        setIsTopbarOpen={setIsTopbarOpen}
-        maestroActivityStage={maestroActivityStage}
-        t={t}
-        targetLanguageDef={targetLanguageDef}
-        selectedLanguagePair={selectedLanguagePair}
-        messages={messages}
-        onLanguageSelectorClick={(e) => { e.stopPropagation(); handleShowLanguageSelector(); }}
-        onToggleDebugLogs={toggleDebugLogs}
-        onToggleHold={handleToggleHold}
-      />
+      <Header />
       {showDebugLogs && <DebugLogPanel onClose={() => setShowDebugLogs(false)} />}
-      <video ref={visualContextVideoRef} playsInline muted className="hidden w-px h-px" aria-hidden="true" />
+      <VisualContextVideo videoRef={visualContextVideoRef} />
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 flex flex-col bg-slate-50">
           <ChatInterface
-            messages={messages}
             onSendMessage={handleSendMessageInternalRef.current || handleSendMessageInternal}
             onDeleteMessage={handleDeleteMessage}
             updateMessage={updateMessage}
@@ -735,8 +570,6 @@ const App: React.FC = () => {
                 (async () => { try { await setChatMetaDB(pairId, { bookmarkMessageId: id }); } catch (e) { console.error(`[App] Failed to persist bookmark for pairId=${pairId}, messageId=${id}:`, e); } })();
               }
             }}
-            bookmarkedMessageId={settingsRef.current.historyBookmarkMessageId || null}
-            maxVisibleMessages={settingsRef.current.maxVisibleMessages ?? MAX_VISIBLE_MESSAGES_DEFAULT}
             onChangeMaxVisibleMessages={(n) => {
               const clamped = Math.max(1, Math.min(100, Math.floor(n || MAX_VISIBLE_MESSAGES_DEFAULT)));
               setSettings(prev => { 
@@ -745,62 +578,16 @@ const App: React.FC = () => {
                 return next; 
               });
             }}
-            isSending={isSending}
             bubbleWrapperRefs={bubbleWrapperRefs}
-
-            isLanguageSelectionOpen={isLanguageSelectionOpen}
-            tempNativeLangCode={tempNativeLangCode}
-            tempTargetLangCode={tempTargetLangCode}
-            onTempNativeSelect={handleTempNativeSelect}
-            onTempTargetSelect={handleTempTargetSelect}
-            onConfirmLanguageSelection={handleConfirmLanguageSelection}
-
-            onSaveAllChats={handleSaveAllChats}
-            onLoadAllChats={handleLoadAllChats}
-            loadingGifs={loadingGifs}
-
-            attachedImageBase64={attachedImageBase64}
-            attachedImageMimeType={attachedImageMimeType}
             onSetAttachedImage={handleSetAttachedImage}
-
-            isSttSupported={effectiveSttSupported}
-            isSttGloballyEnabled={settings.stt.enabled}
-            sttError={sttError}
-            transcript={transcript}
             onSttToggle={sttMasterToggle}
-            clearTranscript={clearTranscript}
-            sttLanguageCode={settings.stt.language}
             onSttLanguageChange={handleSttLanguageChange}
-            targetLanguageDef={targetLanguageDef}
-            nativeLanguageDef={nativeLanguageDef}
-
-            isTtsSupported={isSpeechSynthesisSupported}
-            isSpeaking={isSpeaking}
             speakText={speakWrapper}
             stopSpeaking={stopSpeaking}
-            speakingUtteranceText={speakingUtteranceText}
-
-            speakNativeLang={settings.tts.speakNative}
             onToggleSpeakNativeLang={handleToggleSpeakNativeLang}
-
-            currentTargetLangCode={getPrimaryCode(selectedLanguagePair?.targetLanguageCode || targetLanguageDef.code)}
-            currentNativeLangCode={getPrimaryCode(selectedLanguagePair?.nativeLanguageCode || nativeLanguageDef.code)}
-            currentNativeLangForTranslations={getPrimaryCode(selectedLanguagePair?.nativeLanguageCode || nativeLanguageDef.code)}
-            latestGroundingChunks={latestGroundingChunks}
             onUserInputActivity={handleUserInputActivity}
-            autoCaptureError={visualContextCameraError}
-            selectedCameraId={settings.selectedCameraId}
-            currentCameraFacingMode={currentCameraFacingMode}
-            snapshotUserError={snapshotUserError}
             onToggleSendWithSnapshot={handleToggleSendWithSnapshot}
-            sendWithSnapshotEnabled={settings.sendWithSnapshotEnabled}
             onToggleUseVisualContextForReengagement={handleToggleUseVisualContextForReengagement}
-            useVisualContextForReengagementEnabled={settings.smartReengagement.useVisualContext}
-            availableCameras={availableCameras}
-            onSelectCamera={(id) => handleSettingsChange('selectedCameraId', id)}
-
-            replySuggestions={replySuggestions}
-            isLoadingSuggestions={isLoadingSuggestions}
             onSuggestionClick={(suggestion, langType) => {
               handleSuggestionInteraction(suggestion, langType);
               if (!speechIsSpeakingRef.current && selectedLanguagePairRef.current) {
@@ -819,34 +606,12 @@ const App: React.FC = () => {
               }
               handleUserInputActivity();
             }}
-
-            maestroActivityStage={maestroActivityStage}
-            t={t}
-
-            imageGenerationModeEnabled={settings.imageGenerationModeEnabled}
-            imageFocusedModeEnabled={settings.imageFocusedModeEnabled}
             onToggleImageGenerationMode={handleToggleImageGenerationMode}
             onToggleImageFocusedMode={handleToggleImageFocusedMode}
-            transitioningImageId={transitioningImageId}
-            estimatedImageLoadTime={calculateEstimatedImageLoadTime()}
-            isImageGenCameraSelected={settings.selectedCameraId === IMAGE_GEN_CAMERA_ID}
-            liveVideoStream={liveVideoStream}
-            liveSessionState={liveSessionState}
-            liveSessionError={liveSessionError}
             onStartLiveSession={handleStartLiveSession}
             onStopLiveSession={handleStopLiveSession}
-
-            isSuggestionMode={settings.isSuggestionMode}
             onToggleSuggestionMode={handleToggleSuggestionMode}
             onCreateSuggestion={handleCreateSuggestion}
-            isCreatingSuggestion={isCreatingSuggestion}
-            sendPrep={sendPrep}
-
-            sttProvider={settings.stt.provider || 'browser'}
-            ttsProvider={settings.tts.provider || 'browser'}
-            onToggleSttProvider={toggleSttProvider}
-            onToggleTtsProvider={toggleTtsProvider}
-            isSpeechRecognitionSupported={!!window.SpeechRecognition || !!window.webkitSpeechRecognition}
           />
         </main>
       </div>

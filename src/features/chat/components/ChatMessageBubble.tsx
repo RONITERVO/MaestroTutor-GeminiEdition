@@ -5,6 +5,9 @@ import { TranslationReplacements } from '../../../core/i18n/index';
 import { IconPaperclip, IconXMark, IconPencil, IconUndo, IconGripCorner, IconCheck } from '../../../shared/ui/Icons';
 import TextScrollwheel from './TextScrollwheel';
 import { useMaestroStore } from '../../../store';
+import { selectSettings, selectSelectedLanguagePair, selectTargetLanguageDef, selectNativeLanguageDef } from '../../../store/slices/settingsSlice';
+import { selectIsSpeaking, selectIsSending } from '../../../store/slices/uiSlice';
+import { getPrimaryCode } from '../../../shared/utils/languageUtils';
 import { TOKEN_CATEGORY, TOKEN_SUBTYPE, type TokenSubtype } from '../../../core/config/activityTokens';
 
 interface ChatMessageBubbleProps { 
@@ -12,20 +15,14 @@ interface ChatMessageBubbleProps {
   isFocusedMode: boolean; 
   speakingUtteranceText: string | null; 
   estimatedLoadTime: number; 
-  isSending: boolean;
   loadingGifs?: string[] | null;
-  currentTargetLangCode: string;
-  currentNativeLangCode: string;
   t: (key: string, replacements?: TranslationReplacements) => string;
-  isSpeaking: boolean;
-  speakNativeLang: boolean;
   onToggleSpeakNativeLang: () => void;
   handleSpeakWholeMessage: (message: ChatMessage) => void;
   handleSpeakLine: (targetText: string, targetLangCode: string, nativeText?: string, nativeLangCode?: string, sourceMessageId?: string) => void;
   handlePlayUserMessage: (message: ChatMessage) => void;
   speakText: (textOrParts: SpeechPart[], defaultLang: string) => void;
   stopSpeaking: () => void;
-  isTtsSupported: boolean;
   onToggleImageFocusedMode: () => void;
   transitioningImageId: string | null;
   onSetAttachedImage: (base64: string | null, mimeType: string | null) => void;
@@ -34,13 +31,28 @@ interface ChatMessageBubbleProps {
 }
 
 const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({ 
-  message, isFocusedMode, speakingUtteranceText, estimatedLoadTime, isSending, loadingGifs,
-  currentTargetLangCode, currentNativeLangCode, t,
-  isSpeaking, speakNativeLang, onToggleSpeakNativeLang, handleSpeakWholeMessage: _handleSpeakWholeMessage, handleSpeakLine, handlePlayUserMessage, speakText, stopSpeaking, isTtsSupported: _isTtsSupported,
+  message, isFocusedMode, speakingUtteranceText, estimatedLoadTime, loadingGifs,
+  t,
+  onToggleSpeakNativeLang, handleSpeakWholeMessage: _handleSpeakWholeMessage, handleSpeakLine, handlePlayUserMessage, speakText, stopSpeaking,
   onToggleImageFocusedMode, transitioningImageId, onSetAttachedImage, onUserInputActivity,
   registerBubbleEl
 }) => {
   const isUser = message.role === 'user';
+  const settings = useMaestroStore(selectSettings);
+  const selectedLanguagePair = useMaestroStore(selectSelectedLanguagePair);
+  const targetLanguageDef = useMaestroStore(selectTargetLanguageDef);
+  const nativeLanguageDef = useMaestroStore(selectNativeLanguageDef);
+  const isSpeaking = useMaestroStore(selectIsSpeaking);
+  const isSending = useMaestroStore(selectIsSending);
+  const speakNativeLang = settings.tts.speakNative;
+  const currentTargetLangCode = useMemo(
+    () => getPrimaryCode(selectedLanguagePair?.targetLanguageCode || targetLanguageDef?.code || 'es'),
+    [selectedLanguagePair, targetLanguageDef]
+  );
+  const currentNativeLangCode = useMemo(
+    () => getPrimaryCode(selectedLanguagePair?.nativeLanguageCode || nativeLanguageDef?.code || 'en'),
+    [selectedLanguagePair, nativeLanguageDef]
+  );
 
   const [isAnnotating, setIsAnnotating] = useState(false);
   const [annotationSourceUrl, setAnnotationSourceUrl] = useState<string | null>(null);
@@ -555,7 +567,7 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
   }
 
   const bubbleAlignClass = isUser ? 'justify-end' : 'justify-start';
-  const hasTextContent = message.text || (message.translations && message.translations.some(tr => tr.spanish || tr.english)) || message.rawAssistantResponse;
+  const hasTextContent = message.text || (message.translations && message.translations.some(tr => tr.target || tr.native)) || message.rawAssistantResponse;
   const sanitizedUserText = message.text ? message.text.replace(/\*/g, '') : '';
   const isUserLineSpeaking = isUser && sanitizedUserText && speakingUtteranceText === sanitizedUserText;
 
@@ -906,13 +918,13 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                   )}
  
                    {isAssistant && message.translations && message.translations.length > 0 && message.translations.map((pair, index) => {
-                     const isCurrentlySpeakingSpanish = pair.spanish && speakingUtteranceText === pair.spanish.replace(/\*/g, '');
-                     const isCurrentlySpeakingEnglish = pair.english && speakingUtteranceText === pair.english.replace(/\*/g, '');
-                     const isCurrentLineSpeaking = isCurrentlySpeakingSpanish || isCurrentlySpeakingEnglish;
+                     const isCurrentlySpeakingTarget = pair.target && speakingUtteranceText === pair.target.replace(/\*/g, '');
+                     const isCurrentlySpeakingNative = pair.native && speakingUtteranceText === pair.native.replace(/\*/g, '');
+                     const isCurrentLineSpeaking = isCurrentlySpeakingTarget || isCurrentlySpeakingNative;
  
                      return (
                      <div key={index} className={index > 0 && !applyFocusedImageStyles ? "mt-2" : ""}>
-                       {pair.spanish && (
+                       {pair.target && (
                          <p
                              className={`font-semibold whitespace-pre-wrap cursor-pointer transition-colors rounded-sm px-1 -mx-1 ${
                                  applyFocusedImageStyles
@@ -933,8 +945,8 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                                    const msgContext = { source: 'message' as const, messageId: message.id };
                                    for (let i = startIdx; i < (message.translations?.length || 0); i++) {
                                      const p = message.translations![i];
-                                     const t = p.spanish?.trim();
-                                     const n = p.english?.trim();
+                                     const t = p.target?.trim();
+                                     const n = p.native?.trim();
                                      if (t) parts.push({ text: t, langCode: currentTargetLangCode, context: msgContext });
                                      if (speakNativeLang && n) parts.push({ text: n, langCode: currentNativeLangCode, context: msgContext });
                                    }
@@ -944,16 +956,16 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                                pointerDownPosRef.current = null;
                              }}
                              onPointerLeave={handleLinePointerLeave}
-                             onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !isSpeakDisabled) { e.preventDefault(); handleSpeakLine(pair.spanish, currentTargetLangCode, pair.english, currentNativeLangCode, message.id); } }}
+                             onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !isSpeakDisabled) { e.preventDefault(); handleSpeakLine(pair.target, currentTargetLangCode, pair.native, currentNativeLangCode, message.id); } }}
                              role="button"
                              tabIndex={isSpeakDisabled ? -1 : 0} 
-                             aria-label={`${isSpeaking ? t('chat.stopSpeaking') : t('chat.speakThisLine')}: ${pair.spanish.replace(/\*/g, '')}`}
+                             aria-label={`${isSpeaking ? t('chat.stopSpeaking') : t('chat.speakThisLine')}: ${pair.target.replace(/\*/g, '')}`}
                              aria-disabled={isSpeakDisabled}
                          >
-                             {pair.spanish}
+                             {pair.target}
                          </p>
                        )}
-                       {pair.english && (
+                       {pair.native && (
                         <p className={`italic mt-0.5 whitespace-pre-wrap pl-2 border-l-2 rounded-sm px-1 -mx-1 ${
                              applyFocusedImageStyles
                              ? (isCurrentLineSpeaking ? 'bg-slate-500 text-slate-100' : 'text-gray-200 border-gray-400')
@@ -978,7 +990,7 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                          }}
                          onPointerLeave={handleLinePointerLeave}
                        >
-                          {pair.english}
+                          {pair.native}
                           {nativeFlashIndex === index && (
                             <span className="ml-1 inline-block align-middle animate-speak-flash">
                               {nativeFlashIsOn ? '🔊' : '🔇'}

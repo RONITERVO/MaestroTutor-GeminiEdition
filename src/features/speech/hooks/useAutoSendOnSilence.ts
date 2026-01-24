@@ -5,15 +5,13 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import type { MutableRefObject } from 'react';
+import { useMaestroStore } from '../../../store';
+import { selectIsSending, selectIsSpeaking } from '../../../store/slices/uiSlice';
 
-interface UseAutoSendOnSilenceConfig {
-  settingsRef: MutableRefObject<{ stt: { enabled: boolean }; isSuggestionMode: boolean }>;
+export interface UseAutoSendOnSilenceConfig {
   transcript: string;
   attachedImageBase64: string | null;
   attachedImageMimeType: string | null;
-  isSendingRef: MutableRefObject<boolean>;
-  speechIsSpeakingRef: MutableRefObject<boolean>;
   clearTranscript: () => void;
   handleCreateSuggestion: (text: string) => void;
   handleSendMessageInternal: (text: string, imageBase64?: string, imageMimeType?: string, messageType?: 'user' | 'conversational-reengagement' | 'image-reengagement') => Promise<boolean>;
@@ -21,12 +19,9 @@ interface UseAutoSendOnSilenceConfig {
 }
 
 export const useAutoSendOnSilence = ({
-  settingsRef,
   transcript,
   attachedImageBase64,
   attachedImageMimeType,
-  isSendingRef,
-  speechIsSpeakingRef,
   clearTranscript,
   handleCreateSuggestion,
   handleSendMessageInternal,
@@ -44,7 +39,8 @@ export const useAutoSendOnSilence = ({
   }, []);
 
   useEffect(() => {
-    if (!settingsRef.current.stt.enabled) {
+    const { settings } = useMaestroStore.getState();
+    if (!settings.stt.enabled) {
       clearAutoSend();
       return;
     }
@@ -60,15 +56,12 @@ export const useAutoSendOnSilence = ({
     autoSendTimerRef.current = window.setTimeout(() => {
       const snap = autoSendSnapshotRef.current;
       const current = (transcript || '').trim();
-      if (
-        settingsRef.current.stt.enabled &&
-        !isSendingRef.current &&
-        !speechIsSpeakingRef.current &&
-        current.length >= 2 &&
-        current === snap
-      ) {
+      const state = useMaestroStore.getState();
+      const isSending = selectIsSending(state);
+      const isSpeaking = selectIsSpeaking(state);
+      if (state.settings.stt.enabled && !isSending && !isSpeaking && current.length >= 2 && current === snap) {
         clearTranscript();
-        if (settingsRef.current.isSuggestionMode) {
+        if (state.settings.isSuggestionMode) {
           handleCreateSuggestion(current);
         } else {
           handleSendMessageInternal(current, attachedImageBase64 || undefined, attachedImageMimeType || undefined, 'user');
@@ -81,12 +74,9 @@ export const useAutoSendOnSilence = ({
       clearAutoSend();
     };
   }, [
-    settingsRef,
     transcript,
     attachedImageBase64,
     attachedImageMimeType,
-    isSendingRef,
-    speechIsSpeakingRef,
     clearTranscript,
     handleCreateSuggestion,
     handleSendMessageInternal,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 /**
- * useMaestroController - The main orchestration hook for the Maestro tutor.
+ * useTutorConversation - The main orchestration hook for the Maestro tutor.
  * 
  * This hook coordinates the core message sending logic including:
  * - User message processing with optional media
@@ -12,7 +12,7 @@
  * - Translation and parsing of responses
  */
 
-import { useCallback, useRef, useEffect } from 'react';
+import { useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   ChatMessage, 
   ReplySuggestion, 
@@ -21,64 +21,66 @@ import {
   LanguagePair,
   AppSettings,
   RecordedUtterance 
-} from '../../core/types';
-import { 
-  generateGeminiResponse, 
-  generateImage, 
-  translateText,
-  ApiError, 
-  sanitizeHistoryWithVerifiedUris, 
-  uploadMediaToFiles, 
-  checkFileStatuses 
-} from '../../api/gemini';
-import { getGlobalProfileDB, setGlobalProfileDB, setAppSettingsDB } from '../../features/session';
-import { safeSaveChatHistoryDB, deriveHistoryForApi, INLINE_CAP_AUDIO } from '../../features/chat';
-import { processMediaForUpload, createKeyframeFromVideoDataUrl } from '../../features/vision';
+} from '../../../core/types';
+import { ApiError } from '../../../api/gemini/client';
+import { generateGeminiResponse, translateText } from '../../../api/gemini/generative';
+import { sanitizeHistoryWithVerifiedUris, uploadMediaToFiles, checkFileStatuses } from '../../../api/gemini/files';
+import { generateImage } from '../../../api/gemini/vision';
+import { getGlobalProfileDB, setGlobalProfileDB, setAppSettingsDB } from '../../session';
+import { safeSaveChatHistoryDB, deriveHistoryForApi, INLINE_CAP_AUDIO } from '..';
+import { processMediaForUpload, createKeyframeFromVideoDataUrl } from '../../vision';
 import { 
   DEFAULT_TEXT_MODEL_ID, 
   IMAGE_GEN_CAMERA_ID,
   MAX_MEDIA_TO_KEEP 
-} from '../../core/config/app';
+} from '../../../core/config/app';
 import { 
   DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE, 
   IMAGE_GEN_SYSTEM_INSTRUCTION, 
   IMAGE_GEN_USER_PROMPT_TEMPLATE,
   composeMaestroSystemInstruction 
-} from '../../core/config/prompts';
-import { isRealChatMessage } from '../../shared/utils/common';
-import { getShortLangCodeForPrompt } from '../../shared/utils/languageUtils';
-import type { TranslationFunction } from './useTranslations';
-import { TOKEN_CATEGORY, TOKEN_SUBTYPE } from '../../core/config/activityTokens';
-import { useMaestroStore } from '../../store';
+} from '../../../core/config/prompts';
+import { isRealChatMessage } from '../../../shared/utils/common';
+import { getShortLangCodeForPrompt } from '../../../shared/utils/languageUtils';
+import type { TranslationFunction } from '../../../app/hooks/useTranslations';
+import { TOKEN_CATEGORY, TOKEN_SUBTYPE } from '../../../core/config/activityTokens';
+import { useMaestroStore } from '../../../store';
 import { useShallow } from 'zustand/shallow';
-import { selectIsSending, selectIsLoadingSuggestions, selectIsCreatingSuggestion } from '../../store/slices/uiSlice';
+import { selectIsSending, selectIsLoadingSuggestions, selectIsCreatingSuggestion, selectIsSpeaking } from '../../../store/slices/uiSlice';
+import { selectSelectedLanguagePair } from '../../../store/slices/settingsSlice';
 
 const AUX_TEXT_MODEL_ID = 'gemini-3-flash-preview';
 
-export interface UseMaestroControllerConfig {
+export interface UseTutorConversationConfig {
   // Translation function
   t: TranslationFunction;
   
   // Settings
-  settingsRef: React.MutableRefObject<AppSettings>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  settingsRef?: React.MutableRefObject<AppSettings>;
   setSettings: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
-  selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  selectedLanguagePairRef?: React.MutableRefObject<LanguagePair | undefined>;
   
   // Chat store
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  messagesRef?: React.MutableRefObject<ChatMessage[]>;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>) => void;
   setMessages: (messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
-  isLoadingHistoryRef: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  isLoadingHistoryRef?: React.MutableRefObject<boolean>;
   getHistoryRespectingBookmark: (arr: ChatMessage[]) => ChatMessage[];
   computeMaxMessagesForArray: (arr: ChatMessage[]) => number | undefined;
-  lastFetchedSuggestionsForRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
   
   // Hardware
   captureSnapshot: (isForReengagement?: boolean) => Promise<{ base64: string; mimeType: string; storageOptimizedBase64: string; storageOptimizedMimeType: string } | null>;
   
   // Speech
-  speechIsSpeakingRef: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  speechIsSpeakingRef?: React.MutableRefObject<boolean>;
   speakMessage: (message: ChatMessage) => void;
   isSpeechSynthesisSupported: boolean;
   isListening: boolean;
@@ -87,9 +89,12 @@ export interface UseMaestroControllerConfig {
   clearTranscript: () => void;
   hasPendingQueueItems: () => boolean;
   claimRecordedUtterance: () => RecordedUtterance | null;
-  sttInterruptedBySendRef: React.MutableRefObject<boolean>;
-  recordedUtterancePendingRef: React.MutableRefObject<RecordedUtterance | null>;
-  pendingRecordedAudioMessageRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  sttInterruptedBySendRef?: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  recordedUtterancePendingRef?: React.MutableRefObject<RecordedUtterance | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  pendingRecordedAudioMessageRef?: React.MutableRefObject<string | null>;
   
   // Re-engagement - using refs to allow late binding
   scheduleReengagementRef: React.MutableRefObject<(reason: string, delayOverrideMs?: number) => void>;
@@ -116,7 +121,7 @@ export interface UseMaestroControllerConfig {
   setSnapshotUserError?: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
-export interface UseMaestroControllerReturn {
+export interface UseTutorConversationReturn {
   // State
   isSending: boolean;
   isSendingRef: React.MutableRefObject<boolean>;
@@ -144,7 +149,7 @@ export interface UseMaestroControllerReturn {
   setMaestroActivityStage: (stage: MaestroActivityStage) => void;
   
   // Parsing
-  parseGeminiResponse: (responseText: string | undefined) => Array<{ spanish: string; english: string }>;
+  parseGeminiResponse: (responseText: string | undefined) => Array<{ target: string; native: string }>;
   
   // Utilities
   stripBracketedContent: (input: string | undefined | null) => string;
@@ -159,22 +164,16 @@ export interface UseMaestroControllerReturn {
  * Main orchestration hook for the Maestro Language Tutor.
  * Manages message sending, AI interactions, and conversation flow.
  */
-export const useMaestroController = (config: UseMaestroControllerConfig): UseMaestroControllerReturn => {
+export const useTutorConversation = (config: UseTutorConversationConfig): UseTutorConversationReturn => {
   const {
     t,
-    settingsRef,
     setSettings,
-    selectedLanguagePairRef,
-    messagesRef,
     addMessage,
     updateMessage,
     setMessages,
-    isLoadingHistoryRef,
     getHistoryRespectingBookmark,
     computeMaxMessagesForArray,
-    lastFetchedSuggestionsForRef,
     captureSnapshot,
-    speechIsSpeakingRef,
     speakMessage,
     isSpeechSynthesisSupported,
     isListening,
@@ -183,9 +182,6 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     clearTranscript,
     hasPendingQueueItems,
     claimRecordedUtterance,
-    sttInterruptedBySendRef,
-    recordedUtterancePendingRef,
-    pendingRecordedAudioMessageRef,
     scheduleReengagementRef,
     cancelReengagementRef,
     transcript,
@@ -197,6 +193,82 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     maestroAvatarMimeTypeRef,
     setSnapshotUserError,
   } = config;
+
+  const setLastFetchedSuggestionsFor = useMaestroStore(state => state.setLastFetchedSuggestionsFor);
+  const setRecordedUtterancePending = useMaestroStore(state => state.setRecordedUtterancePending);
+  const setPendingRecordedAudioMessageId = useMaestroStore(state => state.setPendingRecordedAudioMessageId);
+  const setSttInterruptedBySend = useMaestroStore(state => state.setSttInterruptedBySend);
+
+  const settingsRef = useMemo<React.MutableRefObject<AppSettings>>(() => ({
+    get current() {
+      return useMaestroStore.getState().settings;
+    },
+    set current(_value) {},
+  }), []);
+
+  const selectedLanguagePairRef = useMemo<React.MutableRefObject<LanguagePair | undefined>>(() => ({
+    get current() {
+      return selectSelectedLanguagePair(useMaestroStore.getState());
+    },
+    set current(_value) {},
+  }), []);
+
+  const messagesRef = useMemo<React.MutableRefObject<ChatMessage[]>>(() => ({
+    get current() {
+      return useMaestroStore.getState().messages;
+    },
+    set current(_value) {},
+  }), []);
+
+  const isLoadingHistoryRef = useMemo<React.MutableRefObject<boolean>>(() => ({
+    get current() {
+      return useMaestroStore.getState().isLoadingHistory;
+    },
+    set current(_value) {},
+  }), []);
+
+  const lastFetchedSuggestionsForRef = useMemo<React.MutableRefObject<string | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().lastFetchedSuggestionsFor;
+    },
+    set current(value) {
+      setLastFetchedSuggestionsFor(value);
+    },
+  }), [setLastFetchedSuggestionsFor]);
+
+  const speechIsSpeakingRef = useMemo<React.MutableRefObject<boolean>>(() => ({
+    get current() {
+      return selectIsSpeaking(useMaestroStore.getState());
+    },
+    set current(_value) {},
+  }), []);
+
+  const recordedUtterancePendingRef = useMemo<React.MutableRefObject<RecordedUtterance | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().recordedUtterancePending;
+    },
+    set current(value) {
+      setRecordedUtterancePending(value);
+    },
+  }), [setRecordedUtterancePending]);
+
+  const pendingRecordedAudioMessageRef = useMemo<React.MutableRefObject<string | null>>(() => ({
+    get current() {
+      return useMaestroStore.getState().pendingRecordedAudioMessageId;
+    },
+    set current(value) {
+      setPendingRecordedAudioMessageId(value);
+    },
+  }), [setPendingRecordedAudioMessageId]);
+
+  const sttInterruptedBySendRef = useMemo<React.MutableRefObject<boolean>>(() => ({
+    get current() {
+      return useMaestroStore.getState().sttInterruptedBySend;
+    },
+    set current(value) {
+      setSttInterruptedBySend(value);
+    },
+  }), [setSttInterruptedBySend]);
 
   const {
     sendPrep,
@@ -253,12 +325,12 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
     return without.replace(/\s+/g, ' ').trim();
   }, []);
 
-  const parseGeminiResponse = useCallback((responseText: string | undefined): Array<{ spanish: string; english: string }> => {
+  const parseGeminiResponse = useCallback((responseText: string | undefined): Array<{ target: string; native: string }> => {
     if (typeof responseText !== 'string' || !responseText.trim() || !selectedLanguagePairRef.current) {
       return [];
     }
     const lines = responseText.split('\n').map(line => line.trim()).filter(line => line);
-    const translations: Array<{ spanish: string; english: string }> = [];
+    const translations: Array<{ target: string; native: string }> = [];
     const nativeLangPrefix = `[${getShortLangCodeForPrompt(selectedLanguagePairRef.current.nativeLanguageCode)}]`;
 
     for (let i = 0; i < lines.length; i++) {
@@ -270,14 +342,14 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
           nativeContent = lines[i + 1].substring(nativeLangPrefix.length).trim();
           i++;
         }
-        translations.push({ spanish: targetContent, english: nativeContent });
+        translations.push({ target: targetContent, native: nativeContent });
       } else {
-        translations.push({ spanish: "", english: currentLine.substring(nativeLangPrefix.length).trim() });
+        translations.push({ target: "", native: currentLine.substring(nativeLangPrefix.length).trim() });
       }
     }
 
     if (translations.length === 0 && responseText.trim()) {
-      translations.push({ spanish: responseText.trim(), english: "" });
+      translations.push({ target: responseText.trim(), native: "" });
     }
     return translations;
   }, [selectedLanguagePairRef]);
@@ -397,9 +469,12 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
         if (llmUrl && llmMime) {
           dataForUpload = { dataUrl: llmUrl, mimeType: llmMime };
         } else if (uiUrl && uiMime) {
-          const optimized = await processMediaForUpload(uiUrl, uiMime, { t });
-          dataForUpload = { dataUrl: optimized.dataUrl, mimeType: optimized.mimeType };
-          updateMessage(m.id, { storageOptimizedImageUrl: optimized.dataUrl, storageOptimizedImageMimeType: optimized.mimeType });
+          // Upload ORIGINAL to API for best quality, optimize only for local storage
+          dataForUpload = { dataUrl: uiUrl, mimeType: uiMime };
+          try {
+            const optimized = await processMediaForUpload(uiUrl, uiMime, { t });
+            updateMessage(m.id, { storageOptimizedImageUrl: optimized.dataUrl, storageOptimizedImageMimeType: optimized.mimeType });
+          } catch { /* optimization for storage is optional */ }
         }
         if (dataForUpload) {
           const up = await uploadMediaToFiles(dataForUpload.dataUrl, dataForUpload.mimeType, 'send-history');
@@ -488,7 +563,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
         if (msg.role === 'user') {
           return `User: ${msg.text || '(sent an image)'}`;
         }
-        return `Tutor: ${msg.translations?.[0]?.spanish || msg.rawAssistantResponse || msg.text || '(sent an image)'}`;
+        return `Tutor: ${msg.translations?.[0]?.target || msg.rawAssistantResponse || msg.text || '(sent an image)'}`;
       })
       .join('\n');
 
@@ -1244,21 +1319,12 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
         break;
     }
 
-    // For image-reengagement, optimize the image before uploading
+    // For image-reengagement, use original image for API (full quality)
+    // Note: re-engagement images are transient (not persisted in chat), so no storage optimization needed
     if (messageType === 'image-reengagement') {
       if (typeof passedImageBase64 === 'string' && passedImageBase64 && typeof passedImageMimeType === 'string' && passedImageMimeType) {
-        try {
-          if (!sendWithFileUploadInProgressRef.current) {
-            sendWithFileUploadInProgressRef.current = true;
-          }
-          const optimized = await processMediaForUpload(passedImageBase64, passedImageMimeType, { 
-            t, 
-            onProgress: (label, done, total, etaMs) => setSendPrep({ active: true, label, done, total, etaMs }) 
-          });
-          // For re-engagement, optimize strictly
-          imageForGeminiContextBase64 = optimized.dataUrl; 
-          imageForGeminiContextMimeType = optimized.mimeType;
-        } catch (e) { console.warn('Failed to derive low-res for re-engagement media, omitting media', e); }
+        imageForGeminiContextBase64 = passedImageBase64;
+        imageForGeminiContextMimeType = passedImageMimeType;
       }
     }
 
@@ -1378,7 +1444,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
 
       // Early suggestion fetch
       try {
-        const textForSuggestionsEarly = finalMessageUpdates.rawAssistantResponse || (finalMessageUpdates.translations?.find(tr => tr.spanish)?.spanish) || "";
+        const textForSuggestionsEarly = finalMessageUpdates.rawAssistantResponse || (finalMessageUpdates.translations?.find(tr => tr.target)?.target) || "";
         // Check if already loading suggestions via token
         if (!suggestionsTokenRef.current && textForSuggestionsEarly.trim()) {
           const historyWithFinalAssistant = messagesRef.current.map(m =>
@@ -1442,7 +1508,7 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
           !suggestionsTokenRef.current &&
           finalAssistantMessage.id !== lastFetchedSuggestionsForRef.current) {
           const textForSuggestions = finalAssistantMessage.rawAssistantResponse ||
-            (finalAssistantMessage.translations?.find(tr => tr.spanish)?.spanish) || "";
+            (finalAssistantMessage.translations?.find(tr => tr.target)?.target) || "";
           if (textForSuggestions.trim()) {
             requestReplySuggestions(finalAssistantMessage.id, textForSuggestions, getHistoryRespectingBookmark(messagesRef.current));
           }
@@ -1578,4 +1644,4 @@ export const useMaestroController = (config: UseMaestroControllerConfig): UseMae
   };
 };
 
-export default useMaestroController;
+export default useTutorConversation;
