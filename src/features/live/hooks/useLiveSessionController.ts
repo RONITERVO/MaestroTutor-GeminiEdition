@@ -44,17 +44,21 @@ export interface UseLiveSessionControllerConfig {
   t: TranslationFunction;
   
   // Settings
-  settingsRef: React.MutableRefObject<AppSettings>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  settingsRef?: React.MutableRefObject<AppSettings>;
   setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
-  selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  selectedLanguagePairRef?: React.MutableRefObject<LanguagePair | undefined>;
   
   // Chat store
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  messagesRef?: React.MutableRefObject<ChatMessage[]>;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>) => void;
   getHistoryRespectingBookmark: (arr: ChatMessage[]) => ChatMessage[];
   computeMaxMessagesForArray: (arr: ChatMessage[]) => number | undefined;
-  lastFetchedSuggestionsForRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
   fetchAndSetReplySuggestions: (assistantMessageId: string, lastTutorMessage: string, history: ChatMessage[]) => Promise<void>;
   upsertMessageTtsCache: (messageId: string, entry: TtsAudioCacheEntry) => void;
   

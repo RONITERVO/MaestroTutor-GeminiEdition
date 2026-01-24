@@ -318,10 +318,10 @@ const SessionControls: React.FC = () => {
             />
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleResetConfirm} disabled={resetConfirm !== 'DELETE'} className="p-1.5 bg-red-500 rounded-full text-white disabled:opacity-50 hover:bg-red-600">
+            <button type="button" onClick={handleResetConfirm} disabled={resetConfirm !== 'DELETE'} className="p-1.5 bg-red-500 rounded-full text-white disabled:opacity-50 hover:bg-red-600">
               <IconCheck className="w-4 h-4" />
             </button>
-            <button onClick={() => { setResetMode(false); setResetConfirm(''); }} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
+            <button type="button" onClick={() => { setResetMode(false); setResetConfirm(''); }} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
               <IconUndo className="w-4 h-4" />
             </button>
           </div>
@@ -338,10 +338,10 @@ const SessionControls: React.FC = () => {
             />
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={handleProfileSave} className="p-1.5 bg-green-500 rounded-full text-white hover:bg-green-600">
+            <button type="button" onClick={handleProfileSave} className="p-1.5 bg-green-500 rounded-full text-white hover:bg-green-600">
               <IconCheck className="w-4 h-4" />
             </button>
-            <button onClick={() => setIsEditingProfile(false)} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
+            <button type="button" onClick={() => setIsEditingProfile(false)} className="p-1.5 bg-white/20 rounded-full text-white hover:bg-white/30">
               <IconUndo className="w-4 h-4" />
             </button>
           </div>
@@ -349,10 +349,11 @@ const SessionControls: React.FC = () => {
       ) : (
         <>
           <div className="flex items-center gap-3">
-            <button onClick={startProfileEdit} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title="Edit Profile">
+            <button type="button" onClick={startProfileEdit} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title="Edit Profile">
               <IconPencil className="w-4 h-4" />
             </button>
             <button
+              type="button"
               onClick={onToggleTtsProvider}
               className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative"
               title={`TTS Provider: ${ttsProvider === 'gemini' ? 'Gemini' : 'Browser'}`}
@@ -363,6 +364,7 @@ const SessionControls: React.FC = () => {
               </div>
             </button>
             <button
+              type="button"
               onClick={onToggleSttProvider}
               className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative"
               disabled={!isSpeechRecognitionSupported && sttProvider === 'gemini'}
@@ -376,25 +378,27 @@ const SessionControls: React.FC = () => {
           </div>
 
           <div className="flex items-center bg-blue-500/30 rounded-full p-0.5 border border-white/10">
-            <button onClick={handleSave} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title={t('startPage.saveChats')}>
+            <button type="button" onClick={handleSave} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title={t('startPage.saveChats')}>
               <IconSave className="w-4 h-4" />
             </button>
             <div className="w-px h-4 bg-white/20 mx-0.5"></div>
-            <button onClick={() => loadFileInputRef.current?.click()} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title={t('startPage.loadChats')}>
+            <button type="button" onClick={() => loadFileInputRef.current?.click()} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title={t('startPage.loadChats')}>
               <IconFolderOpen className="w-4 h-4" />
             </button>
             <div className="w-px h-4 bg-white/20 mx-0.5"></div>
-            <button onClick={() => setResetMode(true)} className="p-2 hover:bg-red-500/50 rounded-full text-white transition-colors" title="Backup & Reset">
+            <button type="button" onClick={() => setResetMode(true)} className="p-2 hover:bg-red-500/50 rounded-full text-white transition-colors" title="Backup & Reset">
               <IconTrash className="w-4 h-4" />
             </button>
           </div>
           <input type="file" ref={loadFileInputRef} onChange={handleLoadFileChange} accept=".json" className="hidden" />
 
           <div className="relative inline-block">
-            <div
+            <button
+              type="button"
               onClick={!isUploadingMaestro ? handleMaestroAvatarClick : undefined}
-              className={`relative w-8 h-8 rounded-full overflow-hidden border-2 ${maestroAsset?.dataUrl ? 'border-white/50' : 'border-white/30 border-dashed'} bg-white/10 flex items-center justify-center hover:bg-white/20 transition cursor-pointer`}
-              title={maestroAsset?.dataUrl ? t('startPage.maestroAvatar') : t('startPage.addMaestroAvatar')}
+              disabled={isUploadingMaestro}
+              className={`relative w-8 h-8 rounded-full overflow-hidden border-2 ${maestroAsset?.dataUrl ? 'border-white/50' : 'border-white/30 border-dashed'} bg-white/10 flex items-center justify-center hover:bg-white/20 transition cursor-pointer disabled:cursor-wait`}
+              aria-label={maestroAsset?.dataUrl ? t('startPage.maestroAvatar') : t('startPage.addMaestroAvatar')}
             >
               {maestroAsset?.dataUrl ? (
                 <img src={maestroAsset.dataUrl} alt="Maestro" className="w-full h-full object-cover" />
@@ -406,10 +410,11 @@ const SessionControls: React.FC = () => {
                   <SmallSpinner className="w-4 h-4 text-white" />
                 </div>
               )}
-            </div>
+            </button>
             <input type="file" ref={maestroFileInputRef} onChange={handleMaestroFileChange} accept="image/*" className="hidden" />
             {maestroAsset?.dataUrl && !isUploadingMaestro && (
               <button
+                type="button"
                 onClick={handleClearMaestroAvatar}
                 className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm hover:bg-red-600"
                 title={t('general.clear')}

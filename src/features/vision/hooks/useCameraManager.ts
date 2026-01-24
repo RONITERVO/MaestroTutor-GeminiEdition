@@ -23,11 +23,6 @@ export interface UseCameraManagerConfig {
   useVisualContext: boolean;
   /** Selected camera ID - actual value for proper deps tracking */
   selectedCameraId: string | null;
-  settingsRef: React.MutableRefObject<{
-    selectedCameraId: string | null;
-    sendWithSnapshotEnabled: boolean;
-    smartReengagement: { useVisualContext: boolean };
-  }>;
 }
 
 export interface UseCameraManagerReturn {

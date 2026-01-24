@@ -94,6 +94,31 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
     }
   }, [endUiTask]);
 
+  // Cleanup on unmount or stream loss - stop recording and clear timers
+  useEffect(() => {
+    return () => {
+      // Stop any active recording
+      const rec = mediaRecorderRef.current;
+      if (rec && rec.state === 'recording') {
+        try { rec.stop(); } catch {}
+      }
+      // Clear timers
+      if (recordingTimerRef.current) {
+        clearTimeout(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      if (capturePressTimerRef.current) {
+        clearTimeout(capturePressTimerRef.current);
+        capturePressTimerRef.current = null;
+      }
+      // End any pending UI tokens
+      if (videoRecordTokenRef.current) {
+        endUiTask(videoRecordTokenRef.current);
+        videoRecordTokenRef.current = null;
+      }
+    };
+  }, [endUiTask]);
+
   const handleStartRecording = useCallback(() => {
     if (isRecording || !liveVideoStream) return;
     try {
@@ -203,6 +228,7 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
             <div className="relative">
               <img src={attachedImageBase64} alt={t('chat.imagePreview.alt')} className="h-24 w-full object-cover rounded" />
               <button
+                type="button"
                 onClick={onAnnotateImage}
                 className="absolute top-1.5 right-1.5 p-1.5 bg-black/60 text-white rounded-full hover:bg-black"
                 title={t('chat.annotateImage')}
@@ -239,6 +265,7 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
                 }}
               />
               <button
+                type="button"
                 onClick={onAnnotateVideo}
                 disabled={attachedVideoPlaying}
                 className="absolute top-1.5 right-1.5 p-1.5 bg-black/60 text-white rounded-full hover:bg-black disabled:opacity-50"
@@ -259,7 +286,7 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
             </div>
           )}
           <div className="absolute -top-2 -right-2 flex items-center space-x-1">
-            <button onClick={onRemoveAttachment} className="p-1 bg-red-500/80 text-white rounded-full hover:bg-red-500" aria-label={t('chat.removeAttachedImage')}>
+            <button type="button" onClick={onRemoveAttachment} className="p-1 bg-red-500/80 text-white rounded-full hover:bg-red-500" aria-label={t('chat.removeAttachedImage')}>
               <IconXMark className="w-4 h-4" />
             </button>
           </div>
@@ -296,6 +323,7 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
                 </div>
               ) : isRecording ? (
                 <button
+                  type="button"
                   onClick={handleStopRecording}
                   className="p-2 rounded-full bg-red-500/80 text-white group-hover:bg-red-500 transition-colors"
                   aria-label={t('chat.camera.stopRecording')}
@@ -304,6 +332,7 @@ const MediaAttachments: React.FC<MediaAttachmentsProps> = ({
                 </button>
               ) : (
                 <button
+                  type="button"
                   onPointerDown={handleCaptureButtonPointerDown}
                   onPointerUp={handleCaptureButtonPointerUp}
                   onPointerLeave={handleCaptureButtonPointerLeave}

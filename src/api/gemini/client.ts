@@ -15,4 +15,13 @@ export class ApiError extends Error {
   }
 }
 
-export const getAi = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const getAi = () => {
+  const apiKey = process.env.API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    throw new ApiError(
+      'Missing API key: process.env.API_KEY (mapped from VITE_API_KEY) is not set or empty',
+      { code: 'MISSING_API_KEY' }
+    );
+  }
+  return new GoogleGenAI({ apiKey });
+};

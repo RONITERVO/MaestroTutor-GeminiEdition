@@ -56,25 +56,31 @@ export interface UseTutorConversationConfig {
   t: TranslationFunction;
   
   // Settings
-  settingsRef: React.MutableRefObject<AppSettings>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  settingsRef?: React.MutableRefObject<AppSettings>;
   setSettings: (settings: AppSettings | ((prev: AppSettings) => AppSettings)) => void;
-  selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  selectedLanguagePairRef?: React.MutableRefObject<LanguagePair | undefined>;
   
   // Chat store
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  messagesRef?: React.MutableRefObject<ChatMessage[]>;
   addMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => string;
   updateMessage: (messageId: string, updates: Partial<ChatMessage>) => void;
   setMessages: (messages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => void;
-  isLoadingHistoryRef: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  isLoadingHistoryRef?: React.MutableRefObject<boolean>;
   getHistoryRespectingBookmark: (arr: ChatMessage[]) => ChatMessage[];
   computeMaxMessagesForArray: (arr: ChatMessage[]) => number | undefined;
-  lastFetchedSuggestionsForRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
   
   // Hardware
   captureSnapshot: (isForReengagement?: boolean) => Promise<{ base64: string; mimeType: string; storageOptimizedBase64: string; storageOptimizedMimeType: string } | null>;
   
   // Speech
-  speechIsSpeakingRef: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  speechIsSpeakingRef?: React.MutableRefObject<boolean>;
   speakMessage: (message: ChatMessage) => void;
   isSpeechSynthesisSupported: boolean;
   isListening: boolean;
@@ -83,9 +89,12 @@ export interface UseTutorConversationConfig {
   clearTranscript: () => void;
   hasPendingQueueItems: () => boolean;
   claimRecordedUtterance: () => RecordedUtterance | null;
-  sttInterruptedBySendRef: React.MutableRefObject<boolean>;
-  recordedUtterancePendingRef: React.MutableRefObject<RecordedUtterance | null>;
-  pendingRecordedAudioMessageRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  sttInterruptedBySendRef?: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  recordedUtterancePendingRef?: React.MutableRefObject<RecordedUtterance | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  pendingRecordedAudioMessageRef?: React.MutableRefObject<string | null>;
   
   // Re-engagement - using refs to allow late binding
   scheduleReengagementRef: React.MutableRefObject<(reason: string, delayOverrideMs?: number) => void>;
@@ -460,9 +469,12 @@ export const useTutorConversation = (config: UseTutorConversationConfig): UseTut
         if (llmUrl && llmMime) {
           dataForUpload = { dataUrl: llmUrl, mimeType: llmMime };
         } else if (uiUrl && uiMime) {
-          const optimized = await processMediaForUpload(uiUrl, uiMime, { t });
-          dataForUpload = { dataUrl: optimized.dataUrl, mimeType: optimized.mimeType };
-          updateMessage(m.id, { storageOptimizedImageUrl: optimized.dataUrl, storageOptimizedImageMimeType: optimized.mimeType });
+          // Upload ORIGINAL to API for best quality, optimize only for local storage
+          dataForUpload = { dataUrl: uiUrl, mimeType: uiMime };
+          try {
+            const optimized = await processMediaForUpload(uiUrl, uiMime, { t });
+            updateMessage(m.id, { storageOptimizedImageUrl: optimized.dataUrl, storageOptimizedImageMimeType: optimized.mimeType });
+          } catch { /* optimization for storage is optional */ }
         }
         if (dataForUpload) {
           const up = await uploadMediaToFiles(dataForUpload.dataUrl, dataForUpload.mimeType, 'send-history');
@@ -1307,21 +1319,12 @@ export const useTutorConversation = (config: UseTutorConversationConfig): UseTut
         break;
     }
 
-    // For image-reengagement, optimize the image before uploading
+    // For image-reengagement, use original image for API (full quality)
+    // Note: re-engagement images are transient (not persisted in chat), so no storage optimization needed
     if (messageType === 'image-reengagement') {
       if (typeof passedImageBase64 === 'string' && passedImageBase64 && typeof passedImageMimeType === 'string' && passedImageMimeType) {
-        try {
-          if (!sendWithFileUploadInProgressRef.current) {
-            sendWithFileUploadInProgressRef.current = true;
-          }
-          const optimized = await processMediaForUpload(passedImageBase64, passedImageMimeType, { 
-            t, 
-            onProgress: (label, done, total, etaMs) => setSendPrep({ active: true, label, done, total, etaMs }) 
-          });
-          // For re-engagement, optimize strictly
-          imageForGeminiContextBase64 = optimized.dataUrl; 
-          imageForGeminiContextMimeType = optimized.mimeType;
-        } catch (e) { console.warn('Failed to derive low-res for re-engagement media, omitting media', e); }
+        imageForGeminiContextBase64 = passedImageBase64;
+        imageForGeminiContextMimeType = passedImageMimeType;
       }
     }
 

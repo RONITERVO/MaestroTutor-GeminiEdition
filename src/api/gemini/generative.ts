@@ -38,7 +38,7 @@ export const generateGeminiResponse = async (
 
   const currentParts: any[] = [{ text: userPrompt }];
   if (imageFileUri) {
-    currentParts.push({ fileData: { fileUri: imageFileUri, mimeType: imageMimeType } });
+    currentParts.push({ fileData: { fileUri: imageFileUri, mimeType: imageMimeType || 'image/jpeg' } });
   } else if (imageBase64 && imageMimeType) {
     const b64 = imageBase64.split(',')[1];
     if (b64) currentParts.push({ inlineData: { data: b64, mimeType: imageMimeType } });
@@ -53,7 +53,23 @@ export const generateGeminiResponse = async (
     config.tools = [{ googleSearch: {} }];
   }
 
-  const log = debugLogService.logRequest('generateContent', modelName, { contents, config });
+  // Redact inlineData from debug logs to prevent logging large base64 payloads
+  const redactInlineData = (obj: any): any => {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(redactInlineData);
+    const result: any = {};
+    for (const key of Object.keys(obj)) {
+      if (key === 'inlineData') {
+        result[key] = '[REDACTED]';
+      } else {
+        result[key] = redactInlineData(obj[key]);
+      }
+    }
+    return result;
+  };
+  const redactedContents = redactInlineData(contents);
+
+  const log = debugLogService.logRequest('generateContent', modelName, { contents: redactedContents, config });
 
   try {
     const result = await ai.models.generateContent({

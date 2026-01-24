@@ -32,8 +32,13 @@ const LiveSessionControls: React.FC<LiveSessionControlsProps> = ({
       : (isSuggestionMode ? 'bg-gray-700/80 hover:bg-gray-800 text-white' : 'bg-black/60 hover:bg-black/80 text-white'));
 
   const handleLiveSessionToggle = useCallback(() => {
-    if (liveSessionActive) onStopLiveSession();
-    else { try { onStartLiveSession(); } catch {} }
+    if (liveSessionActive) {
+      onStopLiveSession();
+    } else {
+      Promise.resolve(onStartLiveSession()).catch((err) => {
+        console.error('Failed to start live session:', err);
+      });
+    }
   }, [liveSessionActive, onStartLiveSession, onStopLiveSession]);
 
   return (

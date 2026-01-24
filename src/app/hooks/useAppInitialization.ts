@@ -71,13 +71,16 @@ export const useAppInitialization = ({
   const lastFetchedSuggestionsForRef = useRef(lastFetchedSuggestionsFor);
   const isLoadingSuggestionsRef = useRef(isLoadingSuggestions);
 
-  useEffect(() => { settingsRef.current = settings; }, [settings]);
-  useEffect(() => { selectedLanguagePairRef.current = selectedLanguagePair; }, [selectedLanguagePair]);
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-  useEffect(() => { isLoadingHistoryRef.current = isLoadingHistory; }, [isLoadingHistory]);
-  useEffect(() => { replySuggestionsRef.current = replySuggestions; }, [replySuggestions]);
-  useEffect(() => { lastFetchedSuggestionsForRef.current = lastFetchedSuggestionsFor; }, [lastFetchedSuggestionsFor]);
-  useEffect(() => { isLoadingSuggestionsRef.current = isLoadingSuggestions; }, [isLoadingSuggestions]);
+  // Consolidate all ref syncs into a single effect for efficiency
+  useEffect(() => {
+    settingsRef.current = settings;
+    selectedLanguagePairRef.current = selectedLanguagePair;
+    messagesRef.current = messages;
+    isLoadingHistoryRef.current = isLoadingHistory;
+    replySuggestionsRef.current = replySuggestions;
+    lastFetchedSuggestionsForRef.current = lastFetchedSuggestionsFor;
+    isLoadingSuggestionsRef.current = isLoadingSuggestions;
+  }, [settings, selectedLanguagePair, messages, isLoadingHistory, replySuggestions, lastFetchedSuggestionsFor, isLoadingSuggestions]);
 
   const prevPairIdRef = useRef<string | null>(null);
 

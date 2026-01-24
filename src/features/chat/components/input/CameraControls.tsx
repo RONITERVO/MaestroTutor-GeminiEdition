@@ -55,9 +55,10 @@ const CameraControls: React.FC<CameraControlsProps> = ({
     return cameraOptions;
   }, [availableCameras, imageGenerationModeEnabled, t]);
 
+  // Symmetric toggle handlers: activation only turns features ON, deactivation only turns them OFF
   const handleCameraActivationClick = () => {
-    onToggleSendWithSnapshot();
-    onToggleUseVisualContextForReengagement();
+    if (!sendWithSnapshotEnabled) onToggleSendWithSnapshot();
+    if (!useVisualContextForReengagementEnabled) onToggleUseVisualContextForReengagement();
   };
 
   const handleCameraDeactivationClick = () => {
@@ -77,19 +78,17 @@ const CameraControls: React.FC<CameraControlsProps> = ({
             className="hidden"
             id="imageUpload"
           />
-          <label
-            htmlFor="imageUpload"
+          <button
+            type="button"
             className={`p-2 cursor-pointer rounded-full transition-colors ${iconButtonStyle}`}
             title={t('chat.attachImageFromFile')}
-            role="button"
-            tabIndex={0}
             onClick={onPaperclipClick}
           >
             <IconPaperclip className="w-5 h-5" />
-          </label>
+          </button>
           {isCameraActive && allCameraOptions.length > 0 ? (
             <div className={`flex items-center p-0.5 ${isSuggestionMode ? 'bg-gray-300/50' : 'bg-blue-600/50'} rounded-full`}>
-              <button onClick={handleCameraDeactivationClick} className="p-1.5 rounded-full bg-red-500 text-white hover:bg-red-600" title={t('chat.camera.turnOff')}>
+              <button type="button" onClick={handleCameraDeactivationClick} className="p-1.5 rounded-full bg-red-500 text-white hover:bg-red-600" title={t('chat.camera.turnOff')}>
                 <IconXMark className="w-4 h-4" />
               </button>
               <div className="flex items-center space-x-0.5 ml-1">
@@ -101,6 +100,7 @@ const CameraControls: React.FC<CameraControlsProps> = ({
                   else Icon = IconCamera;
                   return (
                     <button
+                      type="button"
                       key={cam.deviceId}
                       onClick={() => onSelectCamera(cam.deviceId)}
                       className={`p-1.5 rounded-full transition-colors ${isSelected ? `bg-white ${isSuggestionMode ? 'text-gray-800' : 'text-blue-600'}` : `${isSuggestionMode ? 'text-gray-600 hover:bg-black/10' : 'text-blue-100 hover:bg-blue-400/80'}`}`}
@@ -114,6 +114,7 @@ const CameraControls: React.FC<CameraControlsProps> = ({
             </div>
           ) : (
             <button
+              type="button"
               onClick={handleCameraActivationClick}
               className={`p-2 cursor-pointer rounded-full transition-colors touch-manipulation ${isSuggestionMode ? 'text-gray-600 hover:text-black hover:bg-black/10' : 'hover:text-white hover:bg-blue-400/80'} ${isImageGenCameraSelected ? (isSuggestionMode ? 'text-purple-600' : 'text-purple-300 hover:text-purple-200') : ''}`}
               title={t('chat.camera.turnOn')}
@@ -122,6 +123,7 @@ const CameraControls: React.FC<CameraControlsProps> = ({
             </button>
           )}
           <button
+            type="button"
             onClick={onToggleImageGenerationMode}
             className={`p-2 cursor-pointer rounded-full transition-colors touch-manipulation ${iconButtonStyle} ${imageGenerationModeEnabled ? (isSuggestionMode ? 'text-purple-600' : 'text-purple-300 hover:text-purple-200') : ''}`}
             title={t('chat.bookIcon.toggleImageGen')}

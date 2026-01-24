@@ -52,7 +52,13 @@ const pcm16ToWavBase64 = (base64Pcm: string, sampleRate = 24000, numChannels = 1
   return bytesToBase64(bytes);
 };
 
-export const generateSpeech = async (params: { text: string; voiceName?: string }) => {
+export interface GenerateSpeechResult {
+  audioBase64: string;
+  mimeType: string;
+  error?: string;
+}
+
+export const generateSpeech = async (params: { text: string; voiceName?: string }): Promise<GenerateSpeechResult> => {
   const ai = getAi();
   const model = 'gemini-2.5-flash-preview-tts';
   const config = {
@@ -74,10 +80,13 @@ export const generateSpeech = async (params: { text: string; voiceName?: string 
       const wavBase64 = pcm16ToWavBase64(part.inlineData.data);
       return { audioBase64: wavBase64, mimeType: 'audio/wav' };
     }
-    log.error('No audio data received');
-  } catch (e) {
+    const noAudioError = 'No audio data received from TTS';
+    log.error(noAudioError);
+    return { audioBase64: '', mimeType: '', error: noAudioError };
+  } catch (e: any) {
+    const errorMessage = e?.message || 'Gemini TTS Error';
     console.error('Gemini TTS Error:', e);
     log.error(e);
+    return { audioBase64: '', mimeType: '', error: errorMessage };
   }
-  return { audioBase64: '', mimeType: '' };
 };

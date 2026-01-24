@@ -75,6 +75,7 @@ const InputArea: React.FC<InputAreaProps> = ({
   const microphoneApiAvailable = useMaestroStore(state => state.microphoneApiAvailable);
   const isCreatingSuggestion = useMaestroStore(selectIsCreatingSuggestion);
 
+  // Read-only live store-backed ref to avoid stale closures; setter intentionally no-op
   const settingsRef = useMemo<React.MutableRefObject<typeof settings>>(() => ({
     get current() {
       return useMaestroStore.getState().settings;
@@ -82,6 +83,7 @@ const InputArea: React.FC<InputAreaProps> = ({
     set current(_value) {},
   }), []);
 
+  // Read-only live store-backed ref to avoid stale closures; setter intentionally no-op
   const messagesRef = useMemo<React.MutableRefObject<any[]>>(() => ({
     get current() {
       return useMaestroStore.getState().messages;
@@ -89,6 +91,7 @@ const InputArea: React.FC<InputAreaProps> = ({
     set current(_value) {},
   }), []);
 
+  // Read-only live store-backed ref to avoid stale closures; setter intentionally no-op
   const isSendingRef = useMemo<React.MutableRefObject<boolean>>(() => ({
     get current() {
       return selectIsSending(useMaestroStore.getState());
@@ -502,7 +505,7 @@ const InputArea: React.FC<InputAreaProps> = ({
           reader.onloadend = () => { onSetAttachedImage(reader.result as string, file.type); };
           reader.readAsDataURL(file);
         };
-        video.onerror = () => { window.URL.revokeObjectURL(video.src); alert(t('chat.error.videoMetadataError')); if (fileInputRef.current) fileInputRef.current.value = ''; };
+        video.onerror = () => { window.URL.revokeObjectURL(video.src); console.error(t('chat.error.videoMetadataError')); if (fileInputRef.current) fileInputRef.current.value = ''; };
         video.src = URL.createObjectURL(file);
       } else {
         const reader = new FileReader();
@@ -565,6 +568,8 @@ const InputArea: React.FC<InputAreaProps> = ({
     if (!paperclipOpenTokenRef.current) {
       paperclipOpenTokenRef.current = createUiToken(TOKEN_SUBTYPE.ATTACH_FILE);
     }
+    // Trigger file input since label htmlFor no longer works with button
+    fileInputRef.current?.click();
   };
 
   return (
@@ -762,6 +767,7 @@ const InputArea: React.FC<InputAreaProps> = ({
                   onUserInputActivity={onUserInputActivity}
                 />
                 <button
+                  type="button"
                   onClick={handleSend}
                   className={`p-2 rounded-full focus:outline-none focus:ring-2 transition-colors disabled:opacity-50 shadow-sm ${sendButtonStyle}`}
                   disabled={isSending || ((!inputText.trim() && !attachedImageBase64) && !languageSelectionOpen) || isSpeaking || (isSuggestionMode && isCreatingSuggestion)}

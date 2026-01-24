@@ -35,7 +35,7 @@ const Composer: React.FC<ComposerProps> = ({
       disabled={isDisabled}
       aria-label={t('chat.messageInputAriaLabel')}
     />
-    {prepDisplay && <span className="sr-only" role="status" aria-live="polite">{prepDisplay}</span>}
+    {prepDisplay && <output className="sr-only" aria-live="polite">{prepDisplay}</output>}
   </div>
 );
 

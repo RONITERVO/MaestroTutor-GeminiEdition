@@ -30,15 +30,20 @@ import { selectIsSending } from '../../../store/slices/uiSlice';
 import { selectSelectedLanguagePair } from '../../../store/slices/settingsSlice';
 
 export interface UseSpeechOrchestratorConfig {
-  settingsRef: React.MutableRefObject<{
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  settingsRef?: React.MutableRefObject<{
     stt: { enabled: boolean; language: string; provider?: 'browser' | 'gemini' };
     tts: { provider?: 'browser' | 'gemini'; speakNative: boolean };
     isSuggestionMode: boolean;
   }>;
-  messagesRef: React.MutableRefObject<ChatMessage[]>;
-  selectedLanguagePairRef: React.MutableRefObject<LanguagePair | undefined>;
-  isSendingRef: React.MutableRefObject<boolean>;
-  lastFetchedSuggestionsForRef: React.MutableRefObject<string | null>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  messagesRef?: React.MutableRefObject<ChatMessage[]>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  selectedLanguagePairRef?: React.MutableRefObject<LanguagePair | undefined>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  isSendingRef?: React.MutableRefObject<boolean>;
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
+  lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
   /** Ref to suggestions - allows late binding after useMaestroController */
   replySuggestionsRef?: React.MutableRefObject<ReplySuggestion[]>;
   upsertMessageTtsCache: (messageId: string, entry: TtsAudioCacheEntry) => void;
@@ -244,12 +249,12 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
       recordedUtterancePendingRef.current = utterance;
       // If there's a pending message waiting for this audio, attach it
       const pendingId = pendingRecordedAudioMessageRef.current;
-      if (pendingId && setMessages) {
+      if (pendingId) {
         pendingRecordedAudioMessageRef.current = null;
         applySetMessages((prev) => prev.map((m) => (m.id === pendingId ? { ...m, recordedUtterance: utterance } : m)));
         recordedUtterancePendingRef.current = null;
       }
-    }, [setMessages])
+    }, [applySetMessages])
   });
 
   // Sync speech state to refs and manage activity tokens

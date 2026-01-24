@@ -164,7 +164,32 @@ const AudioControls: React.FC<AudioControlsProps> = ({
     onSttToggle();
   }, [onSttToggle]);
 
-  useEffect(() => () => { if (micHoldTimerRef.current) clearTimeout(micHoldTimerRef.current); }, []);
+  // Cleanup on unmount: stop recording, release streams, clear timers, end tokens
+  useEffect(() => {
+    return () => {
+      // Clear mic hold timer
+      if (micHoldTimerRef.current) {
+        clearTimeout(micHoldTimerRef.current);
+        micHoldTimerRef.current = null;
+      }
+      // Stop MediaRecorder if active
+      const rec = audioNoteRecorderRef.current;
+      if (rec && rec.state === 'recording') {
+        try { rec.stop(); } catch {}
+      }
+      audioNoteRecorderRef.current = null;
+      // Stop all stream tracks
+      if (audioNoteStreamRef.current) {
+        try { audioNoteStreamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+        audioNoteStreamRef.current = null;
+      }
+      // End UI token if still active
+      if (audioNoteTokenRef.current) {
+        endUiTask(audioNoteTokenRef.current);
+        audioNoteTokenRef.current = null;
+      }
+    };
+  }, [endUiTask]);
 
   const getMicButtonTitle = () => {
     if (isRecordingAudioNote) {
@@ -189,6 +214,7 @@ const AudioControls: React.FC<AudioControlsProps> = ({
       )}
       {!isLanguageSelectionOpen && isSttSupported && (
         <button
+          type="button"
           onClick={handleMicClick}
           onPointerDown={handleMicPointerDown}
           onPointerUp={handleMicPointerUp}

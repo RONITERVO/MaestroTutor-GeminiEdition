@@ -93,30 +93,33 @@ export const selectCurrentReplySuggestionsPromptText = (
 
 const resolveLanguageCodes = (state: Pick<SettingsSlice, 'settings'>) => {
   const pairId = state.settings.selectedLanguagePairId;
-  if (pairId) {
-    const [targetCode, nativeCode] = pairId.split('-');
-    if (targetCode && nativeCode) {
-      return { targetCode, nativeCode };
+  if (pairId && typeof pairId === 'string') {
+    const trimmed = pairId.trim();
+    const parts = trimmed.split('-');
+    // Validate: must have exactly 2 non-empty parts
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      return { targetCode: parts[0], nativeCode: parts[1] };
     }
   }
   return { targetCode: DEFAULT_TARGET_LANG_CODE, nativeCode: DEFAULT_NATIVE_LANG_CODE };
 };
 
-const findLanguageDef = (langCode: string, fallbackCode: string): LanguageDefinition | undefined =>
+// Return type is non-optional since we always fall back to ALL_LANGUAGES[0]
+const findLanguageDef = (langCode: string, fallbackCode: string): LanguageDefinition =>
   ALL_LANGUAGES.find(lang => lang.langCode === langCode)
   || ALL_LANGUAGES.find(lang => lang.langCode === fallbackCode)
   || ALL_LANGUAGES[0];
 
 export const selectTargetLanguageDef = (
   state: Pick<SettingsSlice, 'settings'>
-): LanguageDefinition | undefined => {
+): LanguageDefinition => {
   const { targetCode } = resolveLanguageCodes(state);
   return findLanguageDef(targetCode, DEFAULT_TARGET_LANG_CODE);
 };
 
 export const selectNativeLanguageDef = (
   state: Pick<SettingsSlice, 'settings'>
-): LanguageDefinition | undefined => {
+): LanguageDefinition => {
   const { nativeCode } = resolveLanguageCodes(state);
   return findLanguageDef(nativeCode, DEFAULT_NATIVE_LANG_CODE);
 };

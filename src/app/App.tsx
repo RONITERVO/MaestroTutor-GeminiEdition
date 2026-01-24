@@ -41,6 +41,9 @@ import { selectNonReengagementBusy } from '../store/slices/uiSlice';
 // --- Utils ---
 import { getPrimaryCode } from '../shared/utils/languageUtils';
 
+/** Delay in ms before restarting STT after language change */
+const STT_RESTART_DELAY_MS = 250;
+
 const App: React.FC = () => {
   // ============================================================
   // REFS - Declared before hooks
@@ -85,7 +88,6 @@ const App: React.FC = () => {
     replySuggestions,
     setReplySuggestions,
     replySuggestionsRef,
-    isLoadingSuggestionsRef,
   } = useAppInitialization({
     maestroAvatarUriRef,
     maestroAvatarMimeTypeRef,
@@ -107,7 +109,6 @@ const App: React.FC = () => {
     sendWithSnapshotEnabled: settings.sendWithSnapshotEnabled,
     useVisualContext: settings.smartReengagement.useVisualContext,
     selectedCameraId: settings.selectedCameraId,
-    settingsRef,
   });
 
   const showDebugLogs = useMaestroStore(state => state.showDebugLogs);
@@ -227,12 +228,9 @@ const App: React.FC = () => {
 
 
   const { clearAutoSend } = useAutoSendOnSilence({
-    settingsRef,
     transcript,
     attachedImageBase64,
     attachedImageMimeType,
-    isSendingRef,
-    speechIsSpeakingRef,
     clearTranscript,
     handleCreateSuggestion,
     handleSendMessageInternal,
@@ -241,16 +239,12 @@ const App: React.FC = () => {
 
   useSuggestions({
     isSpeaking,
-    messagesRef,
-    lastFetchedSuggestionsForRef,
-    isLoadingSuggestionsRef,
     fetchAndSetReplySuggestions,
     getHistoryRespectingBookmark,
   });
 
   useSuggestionModeAutoRestart({
     isListening,
-    settingsRef,
     startListening,
   });
 
@@ -398,7 +392,7 @@ const App: React.FC = () => {
           clearTranscript();
           startListening(newSttLang);
         }
-      }, 250);
+      }, STT_RESTART_DELAY_MS);
     } else if (langDidChange) {
       clearTranscript();
     }
@@ -440,7 +434,7 @@ const App: React.FC = () => {
           clearTranscript();
           startListening(langCode);
         }
-      }, 250);
+      }, STT_RESTART_DELAY_MS);
     } else {
       clearTranscript();
     }

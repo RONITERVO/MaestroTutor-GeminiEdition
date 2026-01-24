@@ -5,17 +5,13 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import type { MutableRefObject } from 'react';
 import { useMaestroStore } from '../../../store';
 import { selectIsSending, selectIsSpeaking } from '../../../store/slices/uiSlice';
 
 export interface UseAutoSendOnSilenceConfig {
-  settingsRef: MutableRefObject<{ stt: { enabled: boolean }; isSuggestionMode: boolean }>;
   transcript: string;
   attachedImageBase64: string | null;
   attachedImageMimeType: string | null;
-  isSendingRef: MutableRefObject<boolean>;
-  speechIsSpeakingRef: MutableRefObject<boolean>;
   clearTranscript: () => void;
   handleCreateSuggestion: (text: string) => void;
   handleSendMessageInternal: (text: string, imageBase64?: string, imageMimeType?: string, messageType?: 'user' | 'conversational-reengagement' | 'image-reengagement') => Promise<boolean>;

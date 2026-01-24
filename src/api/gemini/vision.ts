@@ -77,7 +77,9 @@ export const generateImage = async (params: {
   }
 
   if (currentParts.length) {
-    contents.push({ role: 'user', parts: currentParts });
+    // Map role: 'assistant' -> 'model', default to 'user'
+    const role = params.latestMessageRole === 'assistant' ? 'model' : (params.latestMessageRole || 'user');
+    contents.push({ role, parts: currentParts });
   }
 
   const model = 'gemini-2.5-flash-image';

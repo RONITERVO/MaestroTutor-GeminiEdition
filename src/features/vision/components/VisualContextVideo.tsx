@@ -5,7 +5,7 @@ interface VisualContextVideoProps {
 }
 
 const VisualContextVideo: React.FC<VisualContextVideoProps> = ({ videoRef }) => (
-  <video ref={videoRef} playsInline muted className="hidden w-px h-px" aria-hidden="true" />
+  <video ref={videoRef} playsInline muted className="hidden w-px h-px" />
 );
 
 export default VisualContextVideo;

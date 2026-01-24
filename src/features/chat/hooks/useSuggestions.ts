@@ -5,16 +5,12 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { MutableRefObject } from 'react';
 import type { ChatMessage } from '../../../core/types';
 import { useMaestroStore } from '../../../store';
 import { selectIsLoadingSuggestions } from '../../../store/slices/uiSlice';
 
 export interface UseSuggestionsConfig {
   isSpeaking: boolean;
-  messagesRef: MutableRefObject<ChatMessage[]>;
-  lastFetchedSuggestionsForRef: MutableRefObject<string | null>;
-  isLoadingSuggestionsRef: MutableRefObject<boolean>;
   fetchAndSetReplySuggestions: (assistantMessageId: string, lastTutorMessage: string, history: ChatMessage[]) => Promise<void>;
   getHistoryRespectingBookmark: (arr: ChatMessage[]) => ChatMessage[];
 }

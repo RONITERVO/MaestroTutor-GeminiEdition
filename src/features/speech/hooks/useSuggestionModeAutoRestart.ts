@@ -5,12 +5,10 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { MutableRefObject } from 'react';
 import { useMaestroStore } from '../../../store';
 
 export interface UseSuggestionModeAutoRestartConfig {
   isListening: boolean;
-  settingsRef: MutableRefObject<{ stt: { enabled: boolean; language: string }; isSuggestionMode: boolean }>;
   startListening: (lang: string) => void;
 }
 

@@ -24,6 +24,8 @@ const normalizeMimeTypeForUpload = (mimeType: string): string => {
  * Waits for an uploaded file to become ACTIVE before it can be used.
  * Files go through PROCESSING -> ACTIVE (or FAILED) state transitions.
  */
+const MAX_POLL_RETRIES = 10;
+
 const waitForFileActive = async (
   fileNameOrUri: string,
   maxWaitMs: number = 60000,
@@ -36,6 +38,7 @@ const waitForFileActive = async (
   if (m) name = `files/${m[1]}`;
 
   const startTime = Date.now();
+  let retryCount = 0;
 
   while (Date.now() - startTime < maxWaitMs) {
     try {
@@ -58,7 +61,11 @@ const waitForFileActive = async (
       if (e.message?.includes('File processing failed')) {
         throw e;
       }
-      console.warn('Error polling file state, retrying...', e.message);
+      retryCount++;
+      console.warn(`Error polling file state (attempt ${retryCount}/${MAX_POLL_RETRIES}), retrying...`, e.message);
+      if (retryCount >= MAX_POLL_RETRIES) {
+        throw new Error(`Max retries (${MAX_POLL_RETRIES}) exceeded while polling file ${name}: ${e.message}`);
+      }
       await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
     }
   }
@@ -82,7 +89,13 @@ export const checkFileStatuses = async (uris: string[]): Promise<Record<string, 
           active: f.state === 'ACTIVE',
         };
       } catch (e: any) {
-        if (e.message?.includes('404') || e.message?.includes('not found') || e.status === 404) {
+        // Check numeric status first, then fall back to safer string checks
+        const is404 = e.status === 404 || Number(e.status) === 404 ||
+          (e.status === undefined && (
+            e.message?.toLowerCase() === 'not found' ||
+            e.message?.includes('404')
+          ));
+        if (is404) {
           out[uri] = { deleted: true, active: false };
         } else {
           out[uri] = { deleted: false, active: false };
