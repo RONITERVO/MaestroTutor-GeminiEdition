@@ -142,6 +142,7 @@ Generate a single JSON object with four keys: "suggestions", "reengagementSecond
     - Keep it durable, this is your only memory of the user in following interactions (topics, preferences, progress, unresolved questions).
     - You cant recover any lost information, so consider what you know about the user from it, dont forget anything, this is really important for you.
     - You will need to remember everything about the user as they develop over time in {TARGET_LANGUAGE_NAME} this is really important for successful teaching.
+    - Reply suggestions should be personalized. This will be evaluated.
 
 3.  "reengagementSeconds": An integer for a reasonable time (seconds) for the user to think and respond (eg. from 20 seconds up to user requested time in seconds).
 
