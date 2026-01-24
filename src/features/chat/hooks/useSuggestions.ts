@@ -37,8 +37,13 @@ export const useSuggestions = ({
       if (lastMessage && lastMessage.role === 'assistant' && !lastMessage.thinking && lastMessage.id !== state.lastFetchedSuggestionsFor) {
         const textForSuggestions = lastMessage.rawAssistantResponse || (lastMessage.translations?.find(t => t.spanish)?.spanish) || "";
         if (textForSuggestions.trim()) {
+          // Set marker immediately to prevent duplicate fetches while request is in flight
           setLastFetchedSuggestionsFor(lastMessage.id);
-          fetchAndSetReplySuggestions(lastMessage.id, textForSuggestions, getHistoryRespectingBookmark(messages));
+          fetchAndSetReplySuggestions(lastMessage.id, textForSuggestions, getHistoryRespectingBookmark(messages))
+            .catch(() => {
+              // Reset marker on failure to allow retry on next TTS completion
+              setLastFetchedSuggestionsFor(null);
+            });
         }
       }
     }

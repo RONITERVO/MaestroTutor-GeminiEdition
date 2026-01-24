@@ -86,7 +86,7 @@ export const generateGeminiResponse = async (
   } catch (e: any) {
     console.error('Gemini API Error:', e);
     log.error(e);
-    throw new ApiError(e.message || 'Gemini API failed', { status: 500, code: e.status });
+    throw new ApiError(e.message || 'Gemini API failed', { status: e.status || 500, code: e.code });
   }
 };
 
@@ -103,8 +103,8 @@ export const translateText = async (text: string, from: string, to: string) => {
     });
     log.complete({ text: result.text });
     return { translatedText: result.text || '' };
-  } catch (e) {
+  } catch (e: any) {
     log.error(e);
-    throw e;
+    throw new ApiError(e.message || 'Translation failed', { status: e.status || 500, code: e.code });
   }
 };

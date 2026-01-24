@@ -106,7 +106,9 @@ export const generateImage = async (params: {
         }
       }
     }
-    throw new Error('No image generated');
+    // No valid image found in response
+    log.error(new Error('No image generated'));
+    return { error: 'No image generated' };
   } catch (e: any) {
     log.error(e);
     return { error: e.message };

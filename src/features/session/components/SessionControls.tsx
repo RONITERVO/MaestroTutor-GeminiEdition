@@ -85,12 +85,13 @@ const SessionControls: React.FC = () => {
       try {
         const d = e?.detail || {};
         if (d && (typeof d.dataUrl === 'string' || typeof d.uri === 'string')) {
-          setMaestroAsset({
-            dataUrl: typeof d.dataUrl === 'string' ? d.dataUrl : maestroAsset?.dataUrl,
-            mimeType: typeof d.mimeType === 'string' ? d.mimeType : maestroAsset?.mimeType,
-            uri: typeof d.uri === 'string' ? d.uri : maestroAsset?.uri,
+          // Use functional update to avoid stale closure issues
+          setMaestroAsset(prev => ({
+            dataUrl: typeof d.dataUrl === 'string' ? d.dataUrl : prev?.dataUrl,
+            mimeType: typeof d.mimeType === 'string' ? d.mimeType : prev?.mimeType,
+            uri: typeof d.uri === 'string' ? d.uri : prev?.uri,
             updatedAt: Date.now(),
-          });
+          }));
         } else {
           getMaestroProfileImageDB().then(a => setMaestroAsset(a)).catch(() => {});
         }
@@ -98,7 +99,7 @@ const SessionControls: React.FC = () => {
     };
     window.addEventListener('maestro-avatar-updated', handler as any);
     return () => window.removeEventListener('maestro-avatar-updated', handler as any);
-  }, [maestroAsset]);
+  }, []); // Empty deps - handler uses functional update to avoid stale closure
 
   const startProfileEdit = async () => {
     try {
@@ -244,7 +245,8 @@ const SessionControls: React.FC = () => {
       try {
         window.dispatchEvent(new CustomEvent('maestro-avatar-updated', { detail: { uri: uploadedUri, mimeType: uploadedMimeType, dataUrl } }));
       } catch {}
-    } catch {
+    } catch (err) {
+      console.error('Failed to save Maestro avatar:', err);
     } finally {
       setIsUploadingMaestro(false);
       event.target.value = '';

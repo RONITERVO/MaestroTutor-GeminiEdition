@@ -145,18 +145,20 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
 
   const setLastFetchedSuggestionsFor = useMaestroStore(state => state.setLastFetchedSuggestionsFor);
 
+  /** Store-backed ref for settings - reads directly from store, setter is no-op (use setSettings instead) */
   const settingsRef = useMemo<React.MutableRefObject<AppSettings>>(() => ({
     get current() {
       return useMaestroStore.getState().settings;
     },
-    set current(_value) {},
+    set current(_value) { /* no-op: use setSettings to update */ },
   }), []);
 
+  /** Store-backed ref for selectedLanguagePair - reads directly from store, setter is no-op */
   const selectedLanguagePairRef = useMemo<React.MutableRefObject<LanguagePair | undefined>>(() => ({
     get current() {
       return selectSelectedLanguagePair(useMaestroStore.getState());
     },
-    set current(_value) {},
+    set current(_value) { /* no-op: use store actions to update */ },
   }), []);
 
   const messagesRef = useMemo<React.MutableRefObject<ChatMessage[]>>(() => ({

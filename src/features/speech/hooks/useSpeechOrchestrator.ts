@@ -44,7 +44,7 @@ export interface UseSpeechOrchestratorConfig {
   isSendingRef?: React.MutableRefObject<boolean>;
   /** @deprecated Store-backed ref is used internally - this field is ignored */
   lastFetchedSuggestionsForRef?: React.MutableRefObject<string | null>;
-  /** Ref to suggestions - allows late binding after useMaestroController */
+  /** @deprecated Store-backed ref is used internally - this field is ignored */
   replySuggestionsRef?: React.MutableRefObject<ReplySuggestion[]>;
   upsertMessageTtsCache: (messageId: string, entry: TtsAudioCacheEntry) => void;
   upsertSuggestionTtsCache: (messageId: string, suggestionIndex: number, entry: TtsAudioCacheEntry) => void;

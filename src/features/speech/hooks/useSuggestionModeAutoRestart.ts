@@ -34,9 +34,9 @@ export const useSuggestionModeAutoRestart = ({
       if (settings.isSuggestionMode && settings.stt.enabled) {
         restartTimeoutRef.current = window.setTimeout(() => {
           restartTimeoutRef.current = null;
-          // Re-check conditions before starting - avoid re-entrancy
+
           const state = useMaestroStore.getState();
-          if (!isListening && state.settings.stt.enabled && state.settings.isSuggestionMode) {
+          if (state.settings.stt.enabled && state.settings.isSuggestionMode) {
             startListening(state.settings.stt.language);
           }
         }, 100);
