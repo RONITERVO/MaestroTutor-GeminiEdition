@@ -91,7 +91,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => new Promise((resolve, reje
  * @param callbacks - Optional handlers:
  *   - onStateChange(state): invoked when the session state changes ('idle' | 'connecting' | 'active' | 'error')
  *   - onError(message): invoked with an error message when the session encounters an error
- *   - onTurnComplete(userText, modelText, userAudioPcm?, modelAudioPcm?): invoked when an exchange completes with consolidated transcripts and optional Int16Array PCM audio for user and model
+ *   - onTurnComplete(userText, modelText, userAudioPcm?, modelAudioLines?): invoked when an exchange completes with consolidated transcripts and optional Int16Array PCM audio for user and model
  * @returns An object with:
  *   - start(opts): begins a live session using the provided media stream and optional `systemInstruction` and `videoElement`
  *   - stop(): stops the session and releases all audio/video resources and internal state
