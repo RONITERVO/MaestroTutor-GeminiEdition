@@ -71,7 +71,6 @@ const InputArea: React.FC<InputAreaProps> = ({
   const updateLanguageSelectorInteraction = useMaestroStore(state => state.updateLanguageSelectorInteraction);
   const updateSetting = useMaestroStore(state => state.updateSetting);
   const setAttachedImage = useMaestroStore(state => state.setAttachedImage);
-  const isSpeechRecognitionSupported = useMaestroStore(state => state.isSpeechRecognitionSupported);
   const microphoneApiAvailable = useMaestroStore(state => state.microphoneApiAvailable);
   const isCreatingSuggestion = useMaestroStore(selectIsCreatingSuggestion);
 
@@ -102,8 +101,7 @@ const InputArea: React.FC<InputAreaProps> = ({
   const isSuggestionMode = settings.isSuggestionMode;
   const isSttGloballyEnabled = settings.stt.enabled;
   const sttLanguageCode = settings.stt.language;
-  const sttProvider = settings.stt.provider || 'browser';
-  const isSttSupported = sttProvider === 'browser' ? isSpeechRecognitionSupported : microphoneApiAvailable;
+  const isSttSupported = microphoneApiAvailable;
   const sendWithSnapshotEnabled = settings.sendWithSnapshotEnabled;
   const useVisualContextForReengagementEnabled = settings.smartReengagement.useVisualContext;
   const imageGenerationModeEnabled = settings.imageGenerationModeEnabled;

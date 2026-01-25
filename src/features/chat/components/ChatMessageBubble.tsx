@@ -66,7 +66,7 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
   const [remainingTimeDisplay, setRemainingTimeDisplay] = useState<string | null>(null);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const videoPlayTokenRef = useRef<string | null>(null);
-  const isSpeakDisabled = isSending || isSpeaking;
+  const isSpeakDisabled = isSending;
   const resizerRef = useRef<HTMLDivElement>(null);
 
   const pointerDownPosRef = useRef<{x: number, y: number} | null>(null);
@@ -885,9 +885,10 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                            currentTargetLangCode={currentTargetLangCode}
                            currentNativeLangCode={currentNativeLangCode}
                            t={t}
-                           isSpeakDisabled={isSpeaking || isSpeakDisabled}
+                             isSpeaking={isSpeaking}
+                           isSpeakDisabled={isSpeakDisabled}
                            speakText={speakText}
-                           stopSpeaking={stopSpeaking}
+                             stopSpeaking={stopSpeaking}
                speakNativeLang={speakNativeLang}
                onToggleSpeakNativeLang={onToggleSpeakNativeLang}
                messageId={message.id}
@@ -939,7 +940,8 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                                  const dy = Math.abs(e.clientY - pointerDownPosRef.current.y);
                                  if (dx < 10 && dy < 10) {
                                    e.preventDefault();
-                                   if (isSpeakDisabled) { stopSpeaking(); pointerDownPosRef.current = null; return; }
+                                   if (isSpeaking) { stopSpeaking(); pointerDownPosRef.current = null; return; }
+                                   if (isSpeakDisabled) { pointerDownPosRef.current = null; return; }
                                    const startIdx = index;
                                    const parts: SpeechPart[] = [];
                                    const msgContext = { source: 'message' as const, messageId: message.id };

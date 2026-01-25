@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob } from '@google/genai';
 import { mergeInt16Arrays, trimSilence } from '../utils/audioProcessing';
+import { debugLogService } from '../../diagnostics';
 
 export type LiveSessionState = 'idle' | 'connecting' | 'active' | 'error';
 
@@ -112,6 +113,10 @@ export function useGeminiLiveConversation(
   const nextAudioStartTimeRef = useRef<number>(0);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const audioWorkletRegisteredContextsRef = useRef<WeakSet<AudioContext>>(new WeakSet());
+  const logRef = useRef<ReturnType<typeof debugLogService.logRequest> | null>(null);
+  const logFinalizedRef = useRef<boolean>(false);
+  const modelRef = useRef<string>('');
+  const pendingUserTurnRef = useRef<{ text: string; transcript: string; audio: Int16Array } | null>(null);
 
   // Transcription & Audio Accumulators
   const currentInputTranscriptionRef = useRef<string>('');
@@ -199,6 +204,7 @@ export function useGeminiLiveConversation(
     currentModelAudioTotalLengthRef.current = 0;
     modelAudioSplitPointsRef.current = [];
     lastNewlineCountRef.current = 0;
+    pendingUserTurnRef.current = null;
   }, [stopAllAudio]);
 
   const ensureCaptureWorklet = useCallback(async (ctx: AudioContext) => {
@@ -298,9 +304,19 @@ export function useGeminiLiveConversation(
       const outputCtx = new AudioContextCtor({ sampleRate: OUTPUT_SAMPLE_RATE });
       outputAudioContextRef.current = outputCtx;
 
+      const model = 'gemini-2.5-flash-native-audio-preview-12-2025';
+      modelRef.current = model;
+      logFinalizedRef.current = false;
+      logRef.current = debugLogService.logRequest('useGeminiLiveConversation', model, {
+        responseModalities: [Modality.AUDIO],
+        systemInstruction: systemInstruction || '',
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+      });
+
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const session = await ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model,
         config: {
           responseModalities: [Modality.AUDIO],
           systemInstruction: systemInstruction,
@@ -402,8 +418,75 @@ export function useGeminiLiveConversation(
                     modelAudioLines.push(modelAudioFull);
                 }
 
-                if (userText || modelText) {
-                    callbacksRef.current.onTurnComplete?.(userText, modelText, userAudioFull, modelAudioLines);
+                const inputTranscript = currentInputTranscriptionRef.current;
+                const outputTranscript = currentOutputTranscriptionRef.current;
+
+                if (!modelText) {
+                    if (userText || userAudioFull.length > 0 || inputTranscript) {
+                        if (pendingUserTurnRef.current) {
+                            const prev = pendingUserTurnRef.current;
+                            const mergedText = [prev.text, userText].filter(Boolean).join('\n').trim();
+                            const mergedTranscript = [prev.transcript, inputTranscript].filter(Boolean).join(' ').trim();
+                            const mergedAudio = mergeInt16Arrays([prev.audio, userAudioFull]);
+                            pendingUserTurnRef.current = { text: mergedText, transcript: mergedTranscript, audio: mergedAudio };
+                        } else {
+                            pendingUserTurnRef.current = {
+                                text: userText,
+                                transcript: inputTranscript,
+                                audio: userAudioFull,
+                            };
+                        }
+                    }
+                    if (logRef.current && !logFinalizedRef.current) {
+                      logRef.current.complete({
+                        status: 'no-model-response',
+                        userText,
+                        inputTranscript,
+                        modelAudioLinesCount: modelAudioLines.length,
+                        userAudioSamples: userAudioFull.length,
+                      });
+                    }
+                } else {
+                    let finalUserText = userText;
+                    let finalUserAudio = userAudioFull;
+                    let finalInputTranscript = inputTranscript;
+                    const pending = pendingUserTurnRef.current;
+                    if (pending) {
+                        finalUserText = pending.text || userText;
+                        finalInputTranscript = pending.transcript || inputTranscript;
+                        if (pending.audio.length > 0 && userAudioFull.length > 0) {
+                            finalUserAudio = mergeInt16Arrays([pending.audio, userAudioFull]);
+                        } else if (pending.audio.length > 0) {
+                            finalUserAudio = pending.audio;
+                        }
+                        pendingUserTurnRef.current = null;
+                    }
+
+                    callbacksRef.current.onTurnComplete?.(finalUserText, modelText, finalUserAudio, modelAudioLines);
+                    if (logRef.current && !logFinalizedRef.current) {
+                      logRef.current.complete({
+                        status: 'turn-complete',
+                        userText: finalUserText,
+                        modelText,
+                        inputTranscript: finalInputTranscript,
+                        outputTranscript,
+                        modelAudioLinesCount: modelAudioLines.length,
+                        userAudioSamples: finalUserAudio.length,
+                      });
+                    }
+                    const turnLog = debugLogService.logRequest('useGeminiLiveConversation.turn', modelRef.current || 'gemini-live', {
+                      inputTranscript: finalInputTranscript,
+                      outputTranscript,
+                    });
+                    turnLog.complete({
+                      status: 'turn-complete',
+                      userText: finalUserText,
+                      modelText,
+                      inputTranscript: finalInputTranscript,
+                      outputTranscript,
+                      modelAudioLinesCount: modelAudioLines.length,
+                      userAudioSamples: finalUserAudio.length,
+                    });
                 }
                 // Reset all accumulators for next turn
                 currentInputTranscriptionRef.current = '';
@@ -428,6 +511,14 @@ export function useGeminiLiveConversation(
           },
           onclose: () => {
             sessionRef.current = null;
+            if (logRef.current && !logFinalizedRef.current) {
+              logFinalizedRef.current = true;
+              logRef.current.complete({
+                status: 'closed',
+                inputTranscript: currentInputTranscriptionRef.current,
+                outputTranscript: currentOutputTranscriptionRef.current,
+              });
+            }
             updateState('idle');
             cleanup();
           },
@@ -444,6 +535,14 @@ export function useGeminiLiveConversation(
                 }
             } catch {
                 message = "Unknown Connection Error";
+            }
+            if (logRef.current && !logFinalizedRef.current) {
+              logFinalizedRef.current = true;
+              logRef.current.error({
+                message,
+                inputTranscript: currentInputTranscriptionRef.current,
+                outputTranscript: currentOutputTranscriptionRef.current,
+              });
             }
             callbacksRef.current.onError?.(message);
             cleanup();
@@ -491,6 +590,14 @@ export function useGeminiLiveConversation(
 
     } catch (e) {
       updateState('error');
+      if (logRef.current && !logFinalizedRef.current) {
+        logFinalizedRef.current = true;
+        logRef.current.error({
+          message: e instanceof Error ? e.message : String(e),
+          inputTranscript: currentInputTranscriptionRef.current,
+          outputTranscript: currentOutputTranscriptionRef.current,
+        });
+      }
       callbacksRef.current.onError?.(e instanceof Error ? e.message : String(e));
       await cleanup();
     }
@@ -498,6 +605,14 @@ export function useGeminiLiveConversation(
 
   const stop = useCallback(async () => {
     updateState('idle');
+    if (logRef.current && !logFinalizedRef.current) {
+      logFinalizedRef.current = true;
+      logRef.current.complete({
+        status: 'stopped',
+        inputTranscript: currentInputTranscriptionRef.current,
+        outputTranscript: currentOutputTranscriptionRef.current,
+      });
+    }
     await cleanup();
   }, [cleanup, updateState]);
 

@@ -4,8 +4,7 @@ The speech feature handles Text-to-Speech (TTS) and Speech-to-Text (STT) functio
 
 ## Responsibilities
 
-- Browser-based TTS playback
-- Browser-based STT recognition
+- Gemini Live TTS playback (single TTS engine)
 - Gemini Live STT integration
 - Audio recording and playback
 - Speech queue management
@@ -19,14 +18,14 @@ The speech feature handles Text-to-Speech (TTS) and Speech-to-Text (STT) functio
 - `isListening`: Whether STT is active
 - `transcript`: Current recognized text
 - `sttError`: Any STT error message
-- `isSpeechRecognitionSupported`: Browser capability
+- `isSpeechRecognitionSupported`: Microphone API availability
 - `recordedUtterancePending`: Pending audio recording
 - `sttInterruptedBySend`: Whether STT was interrupted by send
 
 **TTS:**
 - `isSpeaking`: Whether TTS is active
 - `speakingUtteranceText`: Text currently being spoken
-- `isSpeechSynthesisSupported`: Browser capability
+- `isSpeechSynthesisSupported`: Live TTS capability
 
 ### Key Actions
 - `setIsListening()`: Update listening state
@@ -54,7 +53,7 @@ import {
 
 ## Hooks
 
-- `useBrowserSpeech`: Browser Speech API wrapper
+- `useBrowserSpeech`: Gemini STT wrapper (legacy name)
 - `useTtsEngine`: TTS engine abstraction
 - `useGeminiLiveConversation`: Gemini Live API
 - `useGeminiLiveStt`: Gemini-based STT

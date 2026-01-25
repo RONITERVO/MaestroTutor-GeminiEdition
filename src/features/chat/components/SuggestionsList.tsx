@@ -28,10 +28,8 @@ const SuggestionsList: React.FC<SuggestionsListProps> = ({
   const isSpeaking = useMaestroStore(selectIsSpeaking);
   const settings = useMaestroStore(selectSettings);
   const isSuggestionMode = settings.isSuggestionMode;
-  const isSpeechRecognitionSupported = useMaestroStore(state => state.isSpeechRecognitionSupported);
   const microphoneApiAvailable = useMaestroStore(state => state.microphoneApiAvailable);
-  const sttProvider = settings.stt.provider || 'browser';
-  const isSttSupported = sttProvider === 'browser' ? isSpeechRecognitionSupported : microphoneApiAvailable;
+  const isSttSupported = microphoneApiAvailable;
 
   const [clickTimeoutId, setClickTimeoutId] = useState<number | null>(null);
   const [lastClickedSuggestionInfo, setLastClickedSuggestionInfo] = useState<{ suggestion: ReplySuggestion, timestamp: number } | null>(null);

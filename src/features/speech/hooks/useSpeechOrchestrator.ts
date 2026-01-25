@@ -19,7 +19,8 @@ import {
   TtsAudioCacheEntry, 
   RecordedUtterance, 
   ReplySuggestion,
-  LanguagePair 
+  LanguagePair,
+  AppSettings
 } from '../../../core/types';
 import useBrowserSpeech from './useBrowserSpeech';
 import { getPrimaryCode } from '../../../shared/utils/languageUtils';
@@ -31,11 +32,7 @@ import { selectSelectedLanguagePair } from '../../../store/slices/settingsSlice'
 
 export interface UseSpeechOrchestratorConfig {
   /** @deprecated Store-backed ref is used internally - this field is ignored */
-  settingsRef?: React.MutableRefObject<{
-    stt: { enabled: boolean; language: string; provider?: 'browser' | 'gemini' };
-    tts: { provider?: 'browser' | 'gemini'; speakNative: boolean };
-    isSuggestionMode: boolean;
-  }>;
+  settingsRef?: React.MutableRefObject<AppSettings>;
   /** @deprecated Store-backed ref is used internally - this field is ignored */
   messagesRef?: React.MutableRefObject<ChatMessage[]>;
   /** @deprecated Store-backed ref is used internally - this field is ignored */
@@ -108,11 +105,7 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
   const setSttInterruptedBySend = useMaestroStore(state => state.setSttInterruptedBySend);
   const applySetMessages = setMessages || storeSetMessages;
 
-  const settingsRef = useMemo<React.MutableRefObject<{
-    stt: { enabled: boolean; language: string; provider?: 'browser' | 'gemini' };
-    tts: { provider?: 'browser' | 'gemini'; speakNative: boolean };
-    isSuggestionMode: boolean;
-  }>>(() => ({
+  const settingsRef = useMemo<React.MutableRefObject<AppSettings>>(() => ({
     get current() {
       return useMaestroStore.getState().settings;
     },
@@ -240,8 +233,6 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
         }, 100);
       }
     }, []),
-    getTtsProvider: useCallback(() => settingsRef.current.tts?.provider || 'browser', []),
-    getSttProvider: useCallback(() => settingsRef.current.stt?.provider || 'browser', []),
     onRecordedUtteranceReady: useCallback((utterance: RecordedUtterance) => {
       if (!utterance || typeof utterance.dataUrl !== 'string' || 
           utterance.dataUrl.length === 0 || utterance.dataUrl.length > INLINE_CAP_AUDIO) {
@@ -295,7 +286,7 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
   }, [speakingUtteranceText, setStoreSpeakingUtteranceText]);
 
   const prepareSpeechPartsWithCache = useCallback((parts: SpeechPart[], defaultLang: string): SpeechPart[] => {
-    const provider = settingsRef.current.tts?.provider || 'browser';
+    const provider = 'gemini-live';
     return parts.map((part) => {
       const cleanedText = (part.text || '').replace(/\*/g, '').trim();
       const lang = part.langCode || defaultLang;

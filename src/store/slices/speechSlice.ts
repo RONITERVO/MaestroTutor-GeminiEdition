@@ -66,14 +66,14 @@ export const createSpeechSlice: StateCreator<
   // Initial STT State (data only - activity tracked via tokens in uiSlice)
   transcript: '',
   sttError: null,
-  isSpeechRecognitionSupported: typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+  isSpeechRecognitionSupported: typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia,
   recordedUtterancePending: null,
   pendingRecordedAudioMessageId: null,
   sttInterruptedBySend: false,
   
   // Initial TTS State (data only - activity tracked via tokens in uiSlice)
   speakingUtteranceText: null,
-  isSpeechSynthesisSupported: typeof window !== 'undefined' && 'speechSynthesis' in window,
+  isSpeechSynthesisSupported: typeof window !== 'undefined' && (!!(window.AudioContext || (window as any).webkitAudioContext) || typeof Audio !== 'undefined'),
   
   // STT Actions
   setTranscript: (transcript: string) => {
@@ -112,6 +112,7 @@ export const createSpeechSlice: StateCreator<
   setIsSpeechSynthesisSupported: (value: boolean) => {
     set({ isSpeechSynthesisSupported: value });
   },
+
   
   // Utility - claim and clear pending recorded utterance
   claimRecordedUtterance: (): RecordedUtterance | null => {

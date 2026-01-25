@@ -37,7 +37,7 @@ export const sanitizeForPersistence = (m: ChatMessage): ChatMessage => {
       sanitized.push({
         key,
         langCode: entry.langCode || '',
-        provider: entry.provider || 'gemini',
+        provider: entry.provider || 'gemini-live',
         audioDataUrl: audio,
         updatedAt: typeof entry.updatedAt === 'number' ? entry.updatedAt : Date.now(),
         voiceName: entry.voiceName,
