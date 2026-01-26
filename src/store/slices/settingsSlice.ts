@@ -27,13 +27,13 @@ export const initialSettings: AppSettings = {
   selectedCameraId: null,
   sendWithSnapshotEnabled: false,
   tts: {
-    provider: 'browser',
+    provider: 'gemini-live',
     speakNative: true,
   },
   stt: {
     enabled: false,
     language: getPrimaryCode(ALL_LANGUAGES.find(l => l.langCode === DEFAULT_NATIVE_LANG_CODE)?.code || STT_LANGUAGES[0].code),
-    provider: 'browser',
+    provider: 'gemini',
   },
   smartReengagement: {
     thresholdSeconds: 45,
@@ -163,6 +163,14 @@ export const createSettingsSlice: StateCreator<
     try {
       const fromDb = await getAppSettingsDB();
       let effective = fromDb || initialSettings;
+
+      if (!effective.tts || effective.tts.provider !== 'gemini-live') {
+        effective = { ...effective, tts: { ...effective.tts, provider: 'gemini-live' } };
+      }
+
+      if (!effective.stt || effective.stt.provider !== 'gemini') {
+        effective = { ...effective, stt: { ...effective.stt, provider: 'gemini' } };
+      }
       
       if (!effective.selectedLanguagePairId || !allGeneratedLanguagePairs.some(p => p.id === effective.selectedLanguagePairId)) {
         effective = { ...effective, selectedLanguagePairId: null };

@@ -1,10 +1,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { generateSpeech } from '../../../api/gemini/audio';
+import { streamGeminiLiveTts } from '../services/geminiLiveTts';
+import { pcmToWav } from '../utils/audioProcessing';
 import type { SpeechPart, TtsProvider, SpeechCacheDetails } from '../../../core/types';
 
 export interface UseTtsEngineOptions {
-  getTtsProvider?: () => TtsProvider;
   onQueueComplete?: () => void;
   onQueueStart?: () => void;
   pauseSttForPlayback?: () => void;
@@ -34,14 +34,17 @@ export interface UseTtsEngineReturn {
 }
 
 export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn => {
-  const { getTtsProvider, onQueueComplete, onQueueStart, pauseSttForPlayback } = options || {};
-  const isSpeechSynthesisSupported = typeof Audio !== 'undefined' || typeof window.speechSynthesis !== 'undefined';
+  const { onQueueComplete, onQueueStart, pauseSttForPlayback } = options || {};
+  const isSpeechSynthesisSupported = typeof window !== 'undefined' && (!!(window.AudioContext || (window as any).webkitAudioContext) || typeof Audio !== 'undefined');
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingUtteranceText, setSpeakingUtteranceText] = useState<string | null>(null);
   
   const queueRef = useRef<SpeechQueueItem[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const geminiLiveActiveRef = useRef(false);
   const queueIdRef = useRef(0);
+  const liveAbortRef = useRef<AbortController | null>(null);
   
   const callbacksRef = useRef({ onQueueComplete, onQueueStart, pauseSttForPlayback });
   useEffect(() => { callbacksRef.current = { onQueueComplete, onQueueStart, pauseSttForPlayback }; }, [onQueueComplete, onQueueStart, pauseSttForPlayback]);
@@ -52,14 +55,129 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
     callbacksRef.current.onQueueComplete?.();
   }, []);
 
+  /**
+   * Get or create the AudioContext for Gemini Live TTS streaming.
+   */
+  const getAudioContext = useCallback(async (): Promise<AudioContext> => {
+    if (!audioContextRef.current) {
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      audioContextRef.current = new AudioContextCtor({ sampleRate: 24000 });
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+    return audioContextRef.current;
+  }, []);
+
+  /**
+   * Process the queue using Gemini Live TTS streaming.
+   * Batches all queued items into a single session for better performance.
+   */
+  const processGeminiLiveQueue = useCallback(async () => {
+    if (geminiLiveActiveRef.current) return; // Already processing
+    
+    const queue = queueRef.current;
+    if (queue.length === 0) {
+      handleQueueComplete();
+      return;
+    }
+
+    // Batch consecutive gemini-live items at the front that are not cached
+    const geminiLiveItems: SpeechQueueItem[] = [];
+    for (const item of queue) {
+      if (item.provider !== 'gemini-live') break;
+      if (item.audioDataUrl || item.cachedAudio) break;
+      geminiLiveItems.push(item);
+    }
+    if (geminiLiveItems.length === 0) {
+      // No gemini-live items ready
+      return;
+    }
+
+    geminiLiveActiveRef.current = true;
+    setIsSpeaking(true);
+    callbacksRef.current.pauseSttForPlayback?.();
+
+    try {
+      const audioContext = await getAudioContext();
+      
+      const lines = geminiLiveItems.map(item => ({
+        text: item.text,
+        langCode: item.langCode,
+        voiceName: item.voiceName,
+        cacheKey: item.cacheKey,
+        onAudioCached: item.onAudioCached ? (audioDataUrl: string) => {
+          if (item.onAudioCached && !item.cacheNotified) {
+            item.onAudioCached(audioDataUrl, { 
+              cacheKey: item.cacheKey, 
+              provider: 'gemini-live', 
+              langCode: item.langCode, 
+              fromCache: false 
+            });
+            item.cacheNotified = true;
+          }
+        } : undefined
+      }));
+
+      const abortController = new AbortController();
+      liveAbortRef.current = abortController;
+      await streamGeminiLiveTts({
+        lines,
+        audioContext,
+        voiceName: geminiLiveItems[0]?.voiceName,
+        abortSignal: abortController.signal,
+        onLineStart: (_lineIndex, text) => {
+          setSpeakingUtteranceText(text);
+        },
+        onLineComplete: (lineIndex, audioPcm) => {
+          // Cache the audio for this line
+          const item = geminiLiveItems[lineIndex];
+          if (item && audioPcm && audioPcm.length > 0) {
+            const audioDataUrl = pcmToWav(audioPcm, 24000);
+            if (item.onAudioCached && !item.cacheNotified) {
+              item.onAudioCached(audioDataUrl, { 
+                cacheKey: item.cacheKey, 
+                provider: 'gemini-live', 
+                langCode: item.langCode, 
+                fromCache: false 
+              });
+              item.cacheNotified = true;
+            }
+
+          }
+        },
+        onError: (error) => {
+          console.error('[GeminiLiveTts] Error:', error);
+        }
+      });
+
+      // Remove all processed gemini-live items from queue
+      queueRef.current = queueRef.current.filter(item => !geminiLiveItems.includes(item));
+      
+    } catch (e) {
+      console.error('[GeminiLiveTts] Exception:', e);
+    } finally {
+      geminiLiveActiveRef.current = false;
+      liveAbortRef.current = null;
+      
+      // Process any remaining items (non-gemini-live or fallback)
+      if (queueRef.current.length > 0) {
+        processSpeechQueue();
+      } else {
+        handleQueueComplete();
+      }
+    }
+  }, [getAudioContext, handleQueueComplete]);
+
   const processSpeechQueue = useCallback(async () => {
     const queue = queueRef.current;
     if (queue.length === 0) {
-      if (!audioRef.current) handleQueueComplete();
+      if (!audioRef.current && !geminiLiveActiveRef.current) handleQueueComplete();
       return;
     }
 
     const current = queue[0];
+    
     const removeCurrent = () => {
       if (queue.length && queue[0].id === current.id) queue.shift();
     };
@@ -69,42 +187,23 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
       current.audioDataUrl = current.cachedAudio;
     }
 
-    // Generate audio if needed (Gemini provider)
-    if (current.provider === 'gemini' && !current.audioDataUrl) {
-      if (current.fetching) return; // wait for fetch
-      current.fetching = true;
-      try {
-        const { audioBase64, mimeType } = await generateSpeech({ 
-          text: current.text, 
-          voiceName: current.voiceName 
-        });
-        if (audioBase64) {
-          const dataUrl = `data:${mimeType || 'audio/wav'};base64,${audioBase64}`;
-          current.audioDataUrl = dataUrl;
-          if (current.onAudioCached && !current.cacheNotified) {
-            current.onAudioCached(dataUrl, { cacheKey: current.cacheKey, provider: 'gemini', langCode: current.langCode, fromCache: false });
-            current.cacheNotified = true;
-          }
-        }
-      } catch (e) {
-        console.error('TTS Generation failed', e);
-        // Fallback to browser TTS for this item if generation fails
-        current.provider = 'browser';
-      } finally {
-        current.fetching = false;
-        processSpeechQueue(); 
-        return;
-      }
+    // Route to Gemini Live TTS if no cached audio
+    if (current.provider !== 'gemini-live') {
+      current.provider = 'gemini-live';
+    }
+    if (!current.audioDataUrl) {
+      processGeminiLiveQueue();
+      return;
     }
 
     // Playback logic
-    if (audioRef.current || (window.speechSynthesis.speaking && current.provider === 'browser')) return; // already playing
+    if (audioRef.current) return; // already playing
 
     setIsSpeaking(true);
     setSpeakingUtteranceText(current.text);
     callbacksRef.current.pauseSttForPlayback?.();
 
-    if (current.provider === 'gemini' && current.audioDataUrl) {
+    if (current.audioDataUrl) {
         const audio = new Audio(current.audioDataUrl);
         audioRef.current = audio;
         audio.onended = () => {
@@ -118,55 +217,57 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
             processSpeechQueue();
         };
         try { await audio.play(); } catch { audioRef.current = null; removeCurrent(); processSpeechQueue(); }
-    } else {
-        // Browser fallback
-        const u = new SpeechSynthesisUtterance(current.text);
-        u.lang = current.langCode;
-        u.onend = () => {
-            removeCurrent();
-            processSpeechQueue();
-        };
-        u.onerror = () => {
-            removeCurrent();
-            processSpeechQueue();
-        };
-        window.speechSynthesis.speak(u);
-    }
-  }, [handleQueueComplete]);
+      }
+  }, [handleQueueComplete, processGeminiLiveQueue]);
 
   const speak = useCallback((textOrParts: string | SpeechPart[], defaultLang: string) => {
     const parts: SpeechPart[] = typeof textOrParts === 'string' ? [{ text: textOrParts, langCode: defaultLang }] : textOrParts;
-    const provider = typeof getTtsProvider === 'function' ? getTtsProvider() : 'gemini';
+    const provider: TtsProvider = 'gemini-live';
     
     if (queueRef.current.length === 0) callbacksRef.current.onQueueStart?.();
 
     parts.forEach(p => {
-        if (!p.text.trim()) return;
-        queueRef.current.push({
-            id: `tts-${Date.now()}-${queueIdRef.current++}`,
-            text: p.text,
-            langCode: p.langCode || defaultLang,
-            voiceName: p.voiceName,
-            provider,
-            cacheKey: p.cacheKey,
-            cachedAudio: p.cachedAudio,
-            onAudioCached: p.onAudioCached
-        });
+      if (!p.text.trim()) return;
+      queueRef.current.push({
+        id: `tts-${Date.now()}-${queueIdRef.current++}`,
+        text: p.text,
+        langCode: p.langCode || defaultLang,
+        voiceName: p.voiceName,
+        provider,
+        cacheKey: p.cacheKey,
+        cachedAudio: p.cachedAudio,
+        onAudioCached: p.onAudioCached
+      });
     });
     processSpeechQueue();
-  }, [getTtsProvider, processSpeechQueue]);
+  }, [processSpeechQueue]);
 
   const stopSpeaking = useCallback(() => {
+    // Stop HTML Audio element
     if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
     }
-    window.speechSynthesis.cancel();
+    if (geminiLiveActiveRef.current) {
+      try { liveAbortRef.current?.abort(); } catch {}
+      geminiLiveActiveRef.current = false;
+      liveAbortRef.current = null;
+    }
+    // Stop Gemini Live TTS (suspend AudioContext to stop playback)
+    if (audioContextRef.current && audioContextRef.current.state === 'running') {
+      audioContextRef.current.suspend();
+    }
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch {}
+      audioContextRef.current = null;
+    }
+    geminiLiveActiveRef.current = false;
+    // Clear queue
     queueRef.current = [];
     handleQueueComplete();
   }, [handleQueueComplete]);
 
-  const hasPendingQueueItems = useCallback(() => queueRef.current.length > 0, []);
+  const hasPendingQueueItems = useCallback(() => queueRef.current.length > 0 || geminiLiveActiveRef.current, []);
 
   return useMemo(() => ({
     isSpeechSynthesisSupported,

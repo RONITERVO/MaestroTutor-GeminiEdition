@@ -65,7 +65,12 @@ export interface LanguagePair {
   isDefault?: boolean;
 }
 
-export type TtsProvider = 'gemini' | 'browser';
+/**
+ * TTS Provider Options:
+ * - 'gemini-live': Gemini Live API as TTS (streaming, queued lines, faster)
+ * - 'gemini'/'browser': legacy providers retained for cache compatibility
+ */
+export type TtsProvider = 'gemini' | 'gemini-live' | 'browser';
 export type SttProvider = 'browser' | 'gemini';
 
 export interface TTSSettings {

@@ -9,7 +9,8 @@ interface TextScrollwheelProps {
   currentTargetLangCode: string;
   currentNativeLangCode: string;
   t: (key: string, replacements?: TranslationReplacements) => string;
-  isSpeakDisabled: boolean;
+  isSpeaking: boolean;
+  isSending: boolean;
   speakText: (textOrParts: SpeechPart[], defaultLang: string) => void;
   stopSpeaking: () => void;
   speakNativeLang: boolean;
@@ -17,7 +18,7 @@ interface TextScrollwheelProps {
   messageId?: string;
 }
 
-const TextScrollwheel: React.FC<TextScrollwheelProps> = React.memo(({ translations, speakingUtteranceText, currentTargetLangCode, currentNativeLangCode, t, isSpeakDisabled, speakText, stopSpeaking, speakNativeLang, onToggleSpeakNativeLang, messageId }) => {
+const TextScrollwheel: React.FC<TextScrollwheelProps> = React.memo(({ translations, speakingUtteranceText, currentTargetLangCode, currentNativeLangCode, t, isSpeaking, isSending, speakText, stopSpeaking, speakNativeLang, onToggleSpeakNativeLang, messageId }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const isUserScrollingRef = useRef(false);
@@ -96,8 +97,11 @@ const TextScrollwheel: React.FC<TextScrollwheelProps> = React.memo(({ translatio
               onToggleSpeakNativeLang();
               return;
             }
-            if (isSpeakDisabled) {
+            if (isSpeaking) {
               stopSpeaking();
+              return;
+            }
+            if (isSending) {
               return;
             }
             const startPairIdx = pairIndexByFlatIndex[flatIndex] ?? 0;

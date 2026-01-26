@@ -21,5 +21,9 @@ export { useSpeechOrchestrator } from './hooks/useSpeechOrchestrator';
 export { useAutoSendOnSilence } from './hooks/useAutoSendOnSilence';
 export { useSuggestionModeAutoRestart } from './hooks/useSuggestionModeAutoRestart';
 
+// Services
+export { streamGeminiLiveTts, type GeminiLiveTtsParams, type GeminiLiveTtsLine } from './services/geminiLiveTts';
+export { validateTriggerAudio } from './services/triggerAudioAsset';
+
 // Utils
 export { pcmToWav, splitPcmBySilence } from './utils/audioProcessing';

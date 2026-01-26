@@ -3,7 +3,6 @@ import { SmallSpinner } from '../../../shared/ui/SmallSpinner';
 import {
   IconPencil,
   IconSparkles,
-  IconRobot,
   IconSpeaker,
   IconMicrophone,
   IconSave,
@@ -13,6 +12,7 @@ import {
   IconUndo,
   IconPlus,
   IconXMark,
+  IconWaveform,
 } from '../../../shared/ui/Icons';
 import { getGlobalProfileDB, setGlobalProfileDB } from '../services/globalProfile';
 import { getMaestroProfileImageDB, setMaestroProfileImageDB, clearMaestroProfileImageDB, MaestroProfileAsset } from '../../../core/db/assets';
@@ -25,22 +25,9 @@ import { useDataBackup } from '../hooks/useDataBackup';
 
 const SessionControls: React.FC = () => {
   const { t } = useAppTranslations();
-  const settings = useMaestroStore(state => state.settings);
-  const updateSetting = useMaestroStore(state => state.updateSetting);
-  const isSpeechRecognitionSupported = useMaestroStore(state => state.isSpeechRecognitionSupported);
   const { handleSaveAllChats, handleLoadAllChats } = useDataBackup({ t });
 
-  const sttProvider = settings.stt.provider || 'browser';
-  const ttsProvider = settings.tts.provider || 'browser';
-  const onToggleSttProvider = useCallback(() => {
-    const next = sttProvider === 'browser' ? 'gemini' : 'browser';
-    updateSetting('stt', { ...settings.stt, provider: next });
-  }, [settings.stt, sttProvider, updateSetting]);
 
-  const onToggleTtsProvider = useCallback(() => {
-    const next = ttsProvider === 'browser' ? 'gemini' : 'browser';
-    updateSetting('tts', { ...settings.tts, provider: next });
-  }, [settings.tts, ttsProvider, updateSetting]);
   const addActivityToken = useMaestroStore(state => state.addActivityToken);
   const removeActivityToken = useMaestroStore(state => state.removeActivityToken);
   const createUiToken = useCallback(
@@ -354,29 +341,24 @@ const SessionControls: React.FC = () => {
             <button type="button" onClick={startProfileEdit} className="p-2 hover:bg-white/20 rounded-full text-white transition-colors" title="Edit Profile">
               <IconPencil className="w-4 h-4" />
             </button>
-            <button
-              type="button"
-              onClick={onToggleTtsProvider}
-              className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative"
-              title={`TTS Provider: ${ttsProvider === 'gemini' ? 'Gemini' : 'Browser'}`}
+            <div
+              className="p-2 rounded-full text-white/80 relative"
+              title="TTS Provider: Gemini Live"
             >
               <IconSpeaker className="w-5 h-5" />
               <div className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 border border-white">
-                {ttsProvider === 'gemini' ? <IconSparkles className="w-2.5 h-2.5 text-white" /> : <IconRobot className="w-2.5 h-2.5 text-white" />}
+                <IconWaveform className="w-2.5 h-2.5 text-white" />
               </div>
-            </button>
-            <button
-              type="button"
-              onClick={onToggleSttProvider}
-              className="p-2 hover:bg-white/20 rounded-full text-white transition-colors relative"
-              disabled={!isSpeechRecognitionSupported && sttProvider === 'gemini'}
-              title={`STT Provider: ${sttProvider === 'gemini' ? 'Gemini' : 'Browser'}`}
+            </div>
+            <div
+              className="p-2 rounded-full text-white/80 relative"
+              title="STT Provider: Gemini"
             >
               <IconMicrophone className="w-5 h-5" />
               <div className="absolute -bottom-1 -right-1 bg-blue-600 rounded-full p-0.5 border border-white">
-                {sttProvider === 'gemini' ? <IconSparkles className="w-2.5 h-2.5 text-white" /> : <IconRobot className="w-2.5 h-2.5 text-white" />}
+                <IconSparkles className="w-2.5 h-2.5 text-white" />
               </div>
-            </button>
+            </div>
           </div>
 
           <div className="flex items-center bg-blue-500/30 rounded-full p-0.5 border border-white/10">

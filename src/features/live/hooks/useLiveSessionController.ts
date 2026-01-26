@@ -262,10 +262,11 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
     modelAudioLines?: Int16Array[]
   ) => {
     let userMessageId = '';
+    let snapshotData: any = null;
+    let snapshotUploadPromise: Promise<{ uri: string; mimeType: string } | null> | null = null;
     
     // 1. Add User Message with Snapshot & Audio
     if (userText) {
-      let snapshotData: any = null;
       try {
         // Capture snapshot of the user when they finished speaking
         snapshotData = await captureSnapshot(false);
@@ -295,7 +296,7 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
 
       // Background optimization and upload for live snapshots
       if (snapshotData && userMessageId) {
-        (async () => {
+        snapshotUploadPromise = (async () => {
           let optimizedDataUrl = snapshotData.storageOptimizedBase64;
           let optimizedMime = snapshotData.storageOptimizedMimeType;
           
@@ -319,6 +320,7 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
               uploadedFileUri: up.uri,
               uploadedFileMimeType: up.mimeType
             });
+            return { uri: up.uri, mimeType: up.mimeType };
           } catch (e) {
             console.warn('Upload failed', e);
             // Still update persistence image
@@ -326,6 +328,7 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
               storageOptimizedImageUrl: optimizedDataUrl,
               storageOptimizedImageMimeType: optimizedMime
             });
+            return null;
           }
         })();
       }
@@ -418,11 +421,11 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
               const textEntry = textLines[i + offset];
               
               if (audioPcm && audioPcm.length > 0 && textEntry) {
-                const key = computeTtsCacheKey(textEntry.text, textEntry.lang, 'gemini');
+                const key = computeTtsCacheKey(textEntry.text, textEntry.lang, 'gemini-live');
                 upsertMessageTtsCache(assistantId, {
                   key,
                   langCode: textEntry.lang,
-                  provider: 'gemini',
+                  provider: 'gemini-live',
                   audioDataUrl: pcmToWav(audioPcm, 24000),
                   updatedAt: Date.now()
                 });
@@ -461,9 +464,32 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
           globalProfileText: gpText,
         });
         
+        let latestSnapshotUri: string | undefined;
+        let latestSnapshotMime: string | undefined;
+        if (snapshotUploadPromise) {
+          try {
+            const up = await snapshotUploadPromise;
+            if (up?.uri) {
+              latestSnapshotUri = up.uri;
+              latestSnapshotMime = up.mimeType;
+            }
+          } catch { /* ignore */ }
+        }
+
         // Add current turn if not in history subset yet
         if (userText && !apiHistory.some(h => h.role === 'user' && h.text === userText)) {
           apiHistory.push({ role: 'user', text: userText });
+        }
+
+        if (userText && latestSnapshotUri) {
+          const reverseIndex = [...apiHistory].reverse().findIndex(h => h.role === 'user' && h.text === userText);
+          if (reverseIndex >= 0) {
+            const idx = apiHistory.length - 1 - reverseIndex;
+            apiHistory[idx].imageFileUri = latestSnapshotUri;
+            apiHistory[idx].imageMimeType = latestSnapshotMime;
+          } else {
+            apiHistory.push({ role: 'user', text: userText, imageFileUri: latestSnapshotUri, imageMimeType: latestSnapshotMime });
+          }
         }
         // Append camera instructions as the final User message, matching standard flow context
         apiHistory.push({ role: 'user', text: DEFAULT_IMAGE_GEN_EXTRA_USER_MESSAGE });

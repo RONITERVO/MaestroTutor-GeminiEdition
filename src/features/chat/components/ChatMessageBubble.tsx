@@ -66,7 +66,6 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
   const [remainingTimeDisplay, setRemainingTimeDisplay] = useState<string | null>(null);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const videoPlayTokenRef = useRef<string | null>(null);
-  const isSpeakDisabled = isSending || isSpeaking;
   const resizerRef = useRef<HTMLDivElement>(null);
 
   const pointerDownPosRef = useRef<{x: number, y: number} | null>(null);
@@ -233,7 +232,11 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
         const deltaY = Math.abs(e.clientY - pointerDownPosRef.current.y);
         if (deltaX < 10 && deltaY < 10) {
             e.preventDefault(); 
-            handleSpeakLine(targetText, targetLangCode, nativeText, nativeLangCode, message.id);
+            if (isSpeaking) {
+              stopSpeaking();
+            } else if (!isSending) {
+              handleSpeakLine(targetText, targetLangCode, nativeText, nativeLangCode, message.id);
+            }
         }
     }
     pointerDownPosRef.current = null;
@@ -253,12 +256,11 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
       const deltaY = Math.abs(e.clientY - pointerDownPosRef.current.y);
       if (deltaX < 10 && deltaY < 10) {
         e.preventDefault();
-        if (isSpeakDisabled) {
+        if (isSpeaking) {
           stopSpeaking();
-          pointerDownPosRef.current = null;
-          return;
+        } else if (!isSending) {
+          handlePlayUserMessage(message);
         }
-        handlePlayUserMessage(message);
       }
     }
     pointerDownPosRef.current = null;
@@ -885,9 +887,10 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                            currentTargetLangCode={currentTargetLangCode}
                            currentNativeLangCode={currentNativeLangCode}
                            t={t}
-                           isSpeakDisabled={isSpeaking || isSpeakDisabled}
+                             isSpeaking={isSpeaking}
+                           isSending={isSending}
                            speakText={speakText}
-                           stopSpeaking={stopSpeaking}
+                             stopSpeaking={stopSpeaking}
                speakNativeLang={speakNativeLang}
                onToggleSpeakNativeLang={onToggleSpeakNativeLang}
                messageId={message.id}
@@ -903,15 +906,19 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                       onPointerUp={handleUserMessagePointerUp}
                       onPointerLeave={handleLinePointerLeave}
                       role="button"
-                      tabIndex={isSpeakDisabled ? -1 : 0}
+                      tabIndex={isSending && !isSpeaking ? -1 : 0}
                       onKeyDown={(e) => {
-                        if ((e.key === 'Enter' || e.key === ' ') && !isSpeakDisabled) {
+                        if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
-                          handlePlayUserMessage(message);
+                          if (isSpeaking) {
+                            stopSpeaking();
+                          } else if (!isSending) {
+                            handlePlayUserMessage(message);
+                          }
                         }
                       }}
                       aria-label={isUserLineSpeaking ? (t('chat.stopSpeaking') || 'Stop playback') : (t('chat.speakThisLine') ? `${t('chat.speakThisLine')}: ${sanitizedUserText}` : 'Play message audio')}
-                      aria-disabled={isSpeakDisabled}
+                      aria-disabled={isSending && !isSpeaking}
                     >
                       {message.text}
                     </p>
@@ -939,7 +946,8 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                                  const dy = Math.abs(e.clientY - pointerDownPosRef.current.y);
                                  if (dx < 10 && dy < 10) {
                                    e.preventDefault();
-                                   if (isSpeakDisabled) { stopSpeaking(); pointerDownPosRef.current = null; return; }
+                                   if (isSpeaking) { stopSpeaking(); pointerDownPosRef.current = null; return; }
+                                   if (isSending) { pointerDownPosRef.current = null; return; }
                                    const startIdx = index;
                                    const parts: SpeechPart[] = [];
                                    const msgContext = { source: 'message' as const, messageId: message.id };
@@ -956,11 +964,20 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                                pointerDownPosRef.current = null;
                              }}
                              onPointerLeave={handleLinePointerLeave}
-                             onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !isSpeakDisabled) { e.preventDefault(); handleSpeakLine(pair.target, currentTargetLangCode, pair.native, currentNativeLangCode, message.id); } }}
+                             onKeyDown={(e) => {
+                               if (e.key === 'Enter' || e.key === ' ') {
+                                 e.preventDefault();
+                                 if (isSpeaking) {
+                                   stopSpeaking();
+                                 } else if (!isSending) {
+                                   handleSpeakLine(pair.target, currentTargetLangCode, pair.native, currentNativeLangCode, message.id);
+                                 }
+                               }
+                             }}
                              role="button"
-                             tabIndex={isSpeakDisabled ? -1 : 0} 
+                             tabIndex={isSending && !isSpeaking ? -1 : 0} 
                              aria-label={`${isSpeaking ? t('chat.stopSpeaking') : t('chat.speakThisLine')}: ${pair.target.replace(/\*/g, '')}`}
-                             aria-disabled={isSpeakDisabled}
+                             aria-disabled={isSending && !isSpeaking}
                          >
                              {pair.target}
                          </p>
@@ -1013,11 +1030,20 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                              onPointerDown={handleLinePointerDown}
                              onPointerUp={(e) => handleLinePointerUp(e, message.rawAssistantResponse!, currentTargetLangCode)}
                              onPointerLeave={handleLinePointerLeave}
-                             onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !isSpeakDisabled) { e.preventDefault(); handleSpeakLine(message.rawAssistantResponse!, currentTargetLangCode, undefined, undefined, message.id); } }}
+                             onKeyDown={(e) => {
+                               if (e.key === 'Enter' || e.key === ' ') {
+                                 e.preventDefault();
+                                 if (isSpeaking) {
+                                   stopSpeaking();
+                                 } else if (!isSending) {
+                                   handleSpeakLine(message.rawAssistantResponse!, currentTargetLangCode, undefined, undefined, message.id);
+                                 }
+                               }
+                             }}
                              role="button"
-                             tabIndex={isSpeakDisabled ? -1 : 0} 
+                             tabIndex={isSending && !isSpeaking ? -1 : 0} 
                              aria-label={`${isSpeaking ? t('chat.stopSpeaking') : t('chat.speakThisLine')}: ${message.rawAssistantResponse!.replace(/\*/g, '')}`}
-                             aria-disabled={isSpeakDisabled}
+                             aria-disabled={isSending && !isSpeaking}
                          >
                              {message.rawAssistantResponse}
                          </p>
