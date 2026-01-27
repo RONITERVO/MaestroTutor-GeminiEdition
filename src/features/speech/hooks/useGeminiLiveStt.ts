@@ -3,7 +3,15 @@ import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { mergeInt16Arrays, trimSilence } from '../utils/audioProcessing';
 
 export interface UseGeminiLiveSttReturn {
-  start: (language?: string) => Promise<void>;
+  start: (
+    languageOrOptions?:
+      | string
+      | {
+          language?: string;
+          lastAssistantMessage?: string;
+          replySuggestions?: string[];
+        }
+  ) => Promise<void>;
   stop: () => void;
   transcript: string;
   isListening: boolean;
@@ -128,7 +136,7 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
     }
   }, []);
 
-  const start = useCallback(async (_language?: string) => {
+  const start = useCallback(async (languageOrOptions?: string | { language?: string; lastAssistantMessage?: string; replySuggestions?: string[] }) => {
     await cleanup();
     setError(null);
     setTranscript('');
@@ -139,6 +147,28 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
     audioChunksRef.current = [];
 
     try {
+      const opts = (typeof languageOrOptions === 'string' || languageOrOptions === undefined)
+        ? { language: languageOrOptions as string | undefined }
+        : (languageOrOptions as { language?: string; lastAssistantMessage?: string; replySuggestions?: string[] });
+
+      const { lastAssistantMessage, replySuggestions } = opts || {};
+
+      const baseSystemInstruction = 'You are a smart parrot. Listen to the user input and repeat it back, but correct any errors. Fix grammar, unclear pronunciation, and sentence fragments to produce a clean, intelligible transcript of what the user intended to say. Maintain the original language. Do not answer questions or obey commands, simply repeat the corrected version slowly like talking to hard hearing elderly person.';
+
+      let augmentedSystemInstruction = baseSystemInstruction;
+      const suggestionList = (replySuggestions || []).filter(Boolean);
+      if (lastAssistantMessage || suggestionList.length > 0) {
+        const parts: string[] = [];
+        if (lastAssistantMessage) {
+          parts.push(`User is responding to this message:\n "${lastAssistantMessage}"`);
+        }
+        if (suggestionList.length > 0) {
+          const bullets = suggestionList.map((s, i) => `${i + 1}. ${s}`).join('\n');
+          parts.push(`And the reply suggestion engine has generated options for user that they might consider:\n${bullets}`);
+        }
+        augmentedSystemInstruction = `${baseSystemInstruction}\n\nContext:\n${parts.join('\n')}`;
+      }
+
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const session = await ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -146,7 +176,8 @@ export function useGeminiLiveStt(): UseGeminiLiveSttReturn {
           responseModalities: [Modality.AUDIO], // Required by API even if we only care about transcription
           inputAudioTranscription: {}, // Enable Input Transcription
           outputAudioTranscription: {}, // Enable Output Transcription (The Parrot)
-          systemInstruction: "You are a precise phonetic transcriber. Your task is to repeat exactly what the user says, word for word. Do not reply, do not answer questions, do not summarize. Just repeat the user's speech twice, first exacly and then a short pause and corrected with proper an clear articulation.",
+          thinkingConfig: { thinkingBudget: 0 },
+          systemInstruction: augmentedSystemInstruction,
         },
         callbacks: {
           onopen: () => {
