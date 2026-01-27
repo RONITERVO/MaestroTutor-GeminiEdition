@@ -310,6 +310,15 @@ ${textBlock}`;
                 source.connect(audioContext.destination);
                 activeSources.push(source);
                 
+                // Clean up the source when it finishes playing to free memory
+                source.onended = () => {
+                  const idx = activeSources.indexOf(source);
+                  if (idx !== -1) {
+                    activeSources.splice(idx, 1);
+                  }
+                  try { source.disconnect(); } catch {}
+                };
+                
                 nextStartTime = Math.max(audioContext.currentTime, nextStartTime);
                 if (sessionStartTime === null) {
                   sessionStartTime = nextStartTime;
