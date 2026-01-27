@@ -46,6 +46,9 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
   const queueIdRef = useRef(0);
   const liveAbortRef = useRef<AbortController | null>(null);
   
+  // Track if context is being created to prevent concurrent creation
+  const creatingContextRef = useRef<boolean>(false);
+  
   const callbacksRef = useRef({ onQueueComplete, onQueueStart, pauseSttForPlayback });
   useEffect(() => { callbacksRef.current = { onQueueComplete, onQueueStart, pauseSttForPlayback }; }, [onQueueComplete, onQueueStart, pauseSttForPlayback]);
 
@@ -57,16 +60,45 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
 
   /**
    * Get or create the AudioContext for Gemini Live TTS streaming.
+   * Ensures proper cleanup of closed contexts before creating new ones.
    */
   const getAudioContext = useCallback(async (): Promise<AudioContext> => {
+    // Clean up closed context before creating a new one
+    if (audioContextRef.current && audioContextRef.current.state === 'closed') {
+      audioContextRef.current = null;
+    }
+    
     if (!audioContextRef.current) {
-      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-      audioContextRef.current = new AudioContextCtor({ sampleRate: 24000 });
+      // Prevent concurrent context creation
+      if (creatingContextRef.current) {
+        // Wait for the context being created
+        await new Promise(resolve => setTimeout(resolve, 50));
+        // After waiting, context may have been created by another call
+        // Use type assertion since TypeScript doesn't track ref mutations across async boundaries
+        const waitedCtx = audioContextRef.current as AudioContext | null;
+        if (waitedCtx) {
+          if (waitedCtx.state === 'suspended') {
+            await waitedCtx.resume();
+          }
+          return waitedCtx;
+        }
+      }
+      
+      creatingContextRef.current = true;
+      try {
+        const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+        audioContextRef.current = new AudioContextCtor({ sampleRate: 24000 });
+      } finally {
+        creatingContextRef.current = false;
+      }
     }
-    if (audioContextRef.current.state === 'suspended') {
-      await audioContextRef.current.resume();
+    
+    // At this point, audioContextRef.current is guaranteed to be set
+    const ctx = audioContextRef.current as AudioContext;
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
     }
-    return audioContextRef.current;
+    return ctx;
   }, []);
 
   /**
@@ -255,7 +287,7 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
     }
     // Stop Gemini Live TTS (suspend AudioContext to stop playback)
     if (audioContextRef.current && audioContextRef.current.state === 'running') {
-      audioContextRef.current.suspend();
+      try { audioContextRef.current.suspend(); } catch {}
     }
     if (audioContextRef.current) {
       try { audioContextRef.current.close(); } catch {}
@@ -266,6 +298,29 @@ export const useTtsEngine = (options?: UseTtsEngineOptions): UseTtsEngineReturn 
     queueRef.current = [];
     handleQueueComplete();
   }, [handleQueueComplete]);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Abort any active live session
+      if (liveAbortRef.current) {
+        try { liveAbortRef.current.abort(); } catch {}
+        liveAbortRef.current = null;
+      }
+      // Stop audio element
+      if (audioRef.current) {
+        try { audioRef.current.pause(); } catch {}
+        audioRef.current = null;
+      }
+      // Close audio context
+      if (audioContextRef.current) {
+        try { audioContextRef.current.close(); } catch {}
+        audioContextRef.current = null;
+      }
+      // Clear queue
+      queueRef.current = [];
+    };
+  }, []);
 
   const hasPendingQueueItems = useCallback(() => queueRef.current.length > 0 || geminiLiveActiveRef.current, []);
 

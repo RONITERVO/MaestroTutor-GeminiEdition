@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob } from '@google/genai';
 import { mergeInt16Arrays, trimSilence } from '../utils/audioProcessing';
 import { debugLogService } from '../../diagnostics';
+import { FLOAT_TO_INT16_PROCESSOR_URL, FLOAT_TO_INT16_PROCESSOR_NAME } from '../worklets';
 
 export type LiveSessionState = 'idle' | 'connecting' | 'active' | 'error';
 
@@ -20,9 +21,11 @@ export interface UseGeminiLiveConversationCallbacks {
   onTurnComplete?: (userText: string, modelText: string, userAudioPcm?: Int16Array, modelAudioLines?: Int16Array[]) => void;
 }
 
-const CAPTURE_WORKLET_NAME = 'gemini-live-mic-capture';
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
+
+// Session counter to prevent stale callback execution after cleanup
+let liveConversationSessionCounter = 0;
 
 function toBase64(bytes: Uint8Array) {
   let binary = '';
@@ -112,11 +115,16 @@ export function useGeminiLiveConversation(
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const nextAudioStartTimeRef = useRef<number>(0);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const audioWorkletRegisteredContextsRef = useRef<WeakSet<AudioContext>>(new WeakSet());
   const logRef = useRef<ReturnType<typeof debugLogService.logRequest> | null>(null);
   const logFinalizedRef = useRef<boolean>(false);
   const modelRef = useRef<string>('');
   const pendingUserTurnRef = useRef<{ text: string; transcript: string; audio: Int16Array } | null>(null);
+  
+  // Session ID to track valid session and invalidate stale callbacks
+  const currentSessionIdRef = useRef<number>(0);
+  
+  // Flag to track if cleanup is in progress to prevent race conditions
+  const isCleaningUpRef = useRef<boolean>(false);
 
   // Transcription & Audio Accumulators
   const currentInputTranscriptionRef = useRef<string>('');
@@ -148,16 +156,27 @@ export function useGeminiLiveConversation(
   }, []);
 
   const cleanup = useCallback(async () => {
+    // Prevent concurrent cleanup operations
+    if (isCleaningUpRef.current) return;
+    isCleaningUpRef.current = true;
+    
+    // Invalidate current session to prevent stale callbacks from processing
+    currentSessionIdRef.current = 0;
+    
     if (frameIntervalRef.current) {
       window.clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
     }
+    
+    // Clear worklet message handler FIRST to stop new audio from accumulating
     if (workletNodeRef.current) {
         try { workletNodeRef.current.port.onmessage = null; workletNodeRef.current.disconnect(); } catch { }
         workletNodeRef.current = null;
     }
     if (microphoneStreamRef.current) {
-      microphoneStreamRef.current.getTracks().forEach(t => t.stop());
+      microphoneStreamRef.current.getTracks().forEach(t => {
+        try { t.stop(); } catch { }
+      });
       microphoneStreamRef.current = null;
     }
     
@@ -194,9 +213,12 @@ export function useGeminiLiveConversation(
     canvasRef.current = null;
 
     if (sessionRef.current) {
-        try { if (typeof sessionRef.current.close === 'function') sessionRef.current.close(); } catch {}
+        const session = sessionRef.current;
         sessionRef.current = null;
+        try { if (typeof session.close === 'function') session.close(); } catch {}
     }
+    
+    // Clear all accumulators to free memory
     currentInputTranscriptionRef.current = '';
     currentOutputTranscriptionRef.current = '';
     currentUserAudioChunksRef.current = [];
@@ -205,43 +227,16 @@ export function useGeminiLiveConversation(
     modelAudioSplitPointsRef.current = [];
     lastNewlineCountRef.current = 0;
     pendingUserTurnRef.current = null;
+    
+    isCleaningUpRef.current = false;
   }, [stopAllAudio]);
 
+  // Load the AudioWorklet module (only needs to happen once per AudioContext)
   const ensureCaptureWorklet = useCallback(async (ctx: AudioContext) => {
     if (!ctx.audioWorklet || typeof ctx.audioWorklet.addModule !== 'function') {
       throw new Error('AudioWorklet is not supported');
     }
-    const registry = audioWorkletRegisteredContextsRef.current;
-    if (registry.has(ctx)) return;
-    
-    // Perform float->int16 conversion in the worklet to avoid main thread processing overhead
-    const source = `class GeminiLiveMicCaptureProcessor extends AudioWorkletProcessor {
-      process(inputs) {
-        const input = inputs[0];
-        const channel = input[0];
-        if (channel && channel.length > 0) {
-          const len = channel.length;
-          const int16 = new Int16Array(len);
-          for (let i = 0; i < len; i++) {
-            let s = channel[i];
-            s = s < -1 ? -1 : s > 1 ? 1 : s;
-            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-          }
-          this.port.postMessage(int16, [int16.buffer]);
-        }
-        return true;
-      }
-    }
-    registerProcessor('${CAPTURE_WORKLET_NAME}', GeminiLiveMicCaptureProcessor);`;
-
-    const blob = new Blob([source], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-    try {
-      await ctx.audioWorklet.addModule(url);
-      registry.add(ctx);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    await ctx.audioWorklet.addModule(FLOAT_TO_INT16_PROCESSOR_URL);
   }, []);
 
   const ensureVideoElementReady = useCallback(async (stream: MediaStream, providedElement?: HTMLVideoElement | null) => {
@@ -273,16 +268,38 @@ export function useGeminiLiveConversation(
 
   const start = useCallback(async (opts: { systemInstruction?: string, stream?: MediaStream, videoElement?: HTMLVideoElement | null }) => {
     const { stream, videoElement, systemInstruction } = opts;
+    
+    // Wait for any in-progress cleanup to finish
+    while (isCleaningUpRef.current) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    
     updateState('connecting');
     
     // Ensure previous session is fully cleaned
     await cleanup();
+    
+    // Generate a new session ID for this start call
+    const sessionId = ++liveConversationSessionCounter;
+    currentSessionIdRef.current = sessionId;
+
+    const abortIfInvalidated = async () => {
+      if (currentSessionIdRef.current !== sessionId) {
+        while (isCleaningUpRef.current) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        await cleanup();
+        return true;
+      }
+      return false;
+    };
 
     try {
       if (!stream || !stream.active) throw new Error('No active stream provided');
 
       // Video Setup
       await ensureVideoElementReady(stream, videoElement);
+      if (await abortIfInvalidated()) return;
       const canvas = document.createElement('canvas');
       canvasRef.current = canvas;
 
@@ -295,10 +312,12 @@ export function useGeminiLiveConversation(
       // Use a new dedicated stream for audio to avoid conflicts
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
       microphoneStreamRef.current = micStream;
+      if (await abortIfInvalidated()) return;
       
       const source = inputCtx.createMediaStreamSource(micStream);
       await ensureCaptureWorklet(inputCtx);
-      const workletNode = new AudioWorkletNode(inputCtx, CAPTURE_WORKLET_NAME, { numberOfInputs: 1, numberOfOutputs: 0 });
+      if (await abortIfInvalidated()) return;
+      const workletNode = new AudioWorkletNode(inputCtx, FLOAT_TO_INT16_PROCESSOR_NAME, { numberOfInputs: 1, numberOfOutputs: 0 });
       workletNodeRef.current = workletNode;
 
       const outputCtx = new AudioContextCtor({ sampleRate: OUTPUT_SAMPLE_RATE });
@@ -326,9 +345,14 @@ export function useGeminiLiveConversation(
         },
         callbacks: {
           onopen: () => {
+            // Check session is still valid before updating state
+            if (currentSessionIdRef.current !== sessionId) return;
             updateState('active');
           },
           onmessage: async (msg: LiveServerMessage) => {
+             // Check session is still valid before processing message
+             if (currentSessionIdRef.current !== sessionId) return;
+             
              // 1. Handle Audio Output
              const inlineAudio = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
              if (inlineAudio && outputAudioContextRef.current) {
@@ -510,6 +534,8 @@ export function useGeminiLiveConversation(
              }
           },
           onclose: () => {
+            // Check session is still valid before updating state
+            if (currentSessionIdRef.current !== sessionId) return;
             sessionRef.current = null;
             if (logRef.current && !logFinalizedRef.current) {
               logFinalizedRef.current = true;
@@ -523,6 +549,8 @@ export function useGeminiLiveConversation(
             cleanup();
           },
           onerror: (err: any) => {
+            // Check session is still valid before updating state
+            if (currentSessionIdRef.current !== sessionId) return;
             updateState('error');
             let message = "Connection error";
             try {
@@ -551,9 +579,18 @@ export function useGeminiLiveConversation(
       });
       
       sessionRef.current = session;
+      
+      // Check if session was invalidated during async connect
+      if (currentSessionIdRef.current !== sessionId) {
+        try { session.close(); } catch {}
+        return;
+      }
 
-      // Audio Streaming Loop (Worklet)
+      // Audio Streaming Loop (Worklet) with session validation
       workletNode.port.onmessage = (event: MessageEvent<Int16Array>) => {
+          // CRITICAL: Check session is still valid before processing audio
+          if (currentSessionIdRef.current !== sessionId) return;
+          
           const pcm = event.data;
           if (!(pcm instanceof Int16Array) || !pcm.length) return;
           
@@ -562,12 +599,17 @@ export function useGeminiLiveConversation(
           
           try {
               sessionRef.current?.sendRealtimeInput({ media: encodeInt16ToBlob(pcm) });
-          } catch {}
+          } catch {
+              // Session may have been closed, ignore send errors
+          }
       };
       source.connect(workletNode);
 
-      // Video Streaming Loop (Canvas Resize)
+      // Video Streaming Loop (Canvas Resize) with session validation
       frameIntervalRef.current = window.setInterval(() => {
+          // Check session is still valid
+          if (currentSessionIdRef.current !== sessionId) return;
+          
           const activeSession = sessionRef.current;
           const activeVideo = captureVideoRef.current;
           const activeCanvas = canvasRef.current;
@@ -616,9 +658,13 @@ export function useGeminiLiveConversation(
     await cleanup();
   }, [cleanup, updateState]);
 
+  // Store cleanup in a ref so the unmount effect doesn't depend on cleanup identity
+  const cleanupRef = useRef(cleanup);
+  cleanupRef.current = cleanup;
+
   useEffect(() => {
-      return () => { cleanup(); };
-  }, [cleanup]);
+      return () => { cleanupRef.current(); };
+  }, []); // Empty deps - only runs on unmount
 
   return { start, stop };
 }

@@ -136,6 +136,17 @@ const useBrowserSpeech = (props?: UseBrowserSpeechProps): UseBrowserSpeechReturn
       }
       return null;
   }, [geminiStt, props, transcript]);
+  
+  // Store geminiStt.stop in a ref so unmount effect doesn't depend on geminiStt identity
+  const geminiSttStopRef = useRef(geminiStt.stop);
+  geminiSttStopRef.current = geminiStt.stop;
+  
+  // Cleanup on unmount - ensure STT is stopped
+  useEffect(() => {
+    return () => {
+      geminiSttStopRef.current();
+    };
+  }, []); // Empty deps - only runs on unmount
 
   return {
       isSpeaking, speak, stopSpeaking, isSpeechSynthesisSupported,
