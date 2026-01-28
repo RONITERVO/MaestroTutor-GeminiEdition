@@ -632,7 +632,6 @@ export const useLiveSessionController = (config: UseLiveSessionControllerConfig)
     startLiveConversation, 
     stopListening, 
     t,
-    settingsRef,
     visualContextStreamRef,
     visualContextVideoRef,
   ]);

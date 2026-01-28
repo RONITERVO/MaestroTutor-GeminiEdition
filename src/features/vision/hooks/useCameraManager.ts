@@ -8,8 +8,7 @@
  * Syncs key state to Zustand store for cross-component access.
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { createSmartRef } from '../../../shared/utils/smartRef';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { CameraDevice } from '../../../core/types';
 import type { TranslationFunction } from '../../../app/hooks/useTranslations';
 import { IMAGE_GEN_CAMERA_ID } from '../../../core/config/app';
@@ -75,9 +74,6 @@ export const useCameraManager = (config: UseCameraManagerConfig): UseCameraManag
   const visualContextVideoRef = useRef<HTMLVideoElement>(null);
   const visualContextStreamRef = useRef<MediaStream | null>(null);
   const availableCamerasRef = useRef<CameraDevice[]>([]);
-
-  // Smart ref - always returns fresh state from store
-  const settingsRef = useMemo(() => createSmartRef(useMaestroStore.getState, state => state.settings), []);
 
   const [availableCameras, setAvailableCameras] = useState<CameraDevice[]>([]);
   const [currentCameraFacingMode, setCurrentCameraFacingMode] = useState<'user' | 'environment' | 'unknown'>('unknown');
@@ -353,14 +349,14 @@ export const useCameraManager = (config: UseCameraManagerConfig): UseCameraManag
       if (streamForCapture && streamWasTemporarilyStarted) {
         streamForCapture.getTracks().forEach(track => track.stop());
         if (videoElement.srcObject === streamForCapture && 
-            !((settingsRef.current.smartReengagement.useVisualContext || liveVideoStream) && 
+            !((useVisualContext || liveVideoStream) && 
               visualContextStreamRef.current === streamForCapture)) {
           videoElement.srcObject = null;
           videoElement.load();
         }
       }
     }
-  }, [t, liveVideoStream, selectedCameraId]);
+  }, [t, liveVideoStream, selectedCameraId, useVisualContext]);
 
   return {
     availableCameras,

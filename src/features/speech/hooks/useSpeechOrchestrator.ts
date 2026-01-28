@@ -223,7 +223,7 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
       .map(s => s?.target || s?.native)
       .filter(Boolean) as string[];
     return { lastAssistantMessage, replySuggestions };
-  }, [messagesRef, replySuggestionsRef]);
+  }, []);
 
   const startListeningWithContext = useCallback(
     (languageOrOptions?: string | { language?: string; lastAssistantMessage?: string; replySuggestions?: string[] }) => {
@@ -345,7 +345,7 @@ export const useSpeechOrchestrator = (config: UseSpeechOrchestratorConfig): UseS
         onAudioCached,
       };
     });
-  }, [messagesRef, replySuggestionsRef, upsertMessageTtsCache, upsertSuggestionTtsCache, lastFetchedSuggestionsForRef]);
+  }, [upsertMessageTtsCache, upsertSuggestionTtsCache, lastFetchedSuggestionsForRef]);
 
   const speakMessage = useCallback((message: ChatMessage) => {
     const selectedLanguagePair = selectedLanguagePairRef.current;
