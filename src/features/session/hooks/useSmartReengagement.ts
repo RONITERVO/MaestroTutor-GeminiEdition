@@ -1,6 +1,5 @@
 
-import { useRef, useEffect, useCallback } from 'react';
-import { AppSettings } from '../../../core/types';
+import { useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   TOKEN_CATEGORY,
   TOKEN_SUBTYPE,
@@ -8,9 +7,9 @@ import {
   isReengagementToken,
 } from '../../../core/config/activityTokens';
 import { useMaestroStore } from '../../../store';
+import { createSmartRef } from '../../../shared/utils/smartRef';
 
 interface UseSmartReengagementProps {
-  settings: AppSettings;
   isLoadingHistory: boolean;
   selectedLanguagePairId: string | null;
   activityTokens: Set<string>; // Unified token set replaces multiple boolean props
@@ -21,7 +20,6 @@ interface UseSmartReengagementProps {
 }
 
 export const useSmartReengagement = ({
-  settings,
   isLoadingHistory,
   selectedLanguagePairId,
   activityTokens,
@@ -50,14 +48,15 @@ export const useSmartReengagement = ({
   const canScheduleReengagementRef = useRef<() => boolean>(() => false);
   const triggerReengagementSequenceRef = useRef(triggerReengagementSequence);
   
-  // Refs for stable access to props
-  const settingsRef = useRef(settings);
+  // Refs for stable access to callback props (these change frequently and must remain as manual refs)
   const addActivityTokenRef = useRef(addActivityToken);
   const removeActivityTokenRef = useRef(removeActivityToken);
+  
+  // Smart ref for settings - always returns fresh state from store (no stale closures)
+  const settingsRef = useMemo(() => createSmartRef(useMaestroStore.getState, state => state.settings), []);
 
-  // Keep refs updated
+  // Keep callback refs updated (settings no longer needs syncing - it uses smart ref)
   useEffect(() => { triggerReengagementSequenceRef.current = triggerReengagementSequence; }, [triggerReengagementSequence]);
-  useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { addActivityTokenRef.current = addActivityToken; }, [addActivityToken]);
   useEffect(() => { removeActivityTokenRef.current = removeActivityToken; }, [removeActivityToken]);
 

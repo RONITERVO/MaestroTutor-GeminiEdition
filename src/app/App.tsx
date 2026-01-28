@@ -13,7 +13,7 @@
  * and src/features/ /hooks.
  */
  
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef, useMemo } from 'react';
 
 // --- Features Components ---
 import { ChatInterface } from '../features/chat';
@@ -37,9 +37,11 @@ import { setChatMetaDB } from '../features/chat';
 // --- Config ---
 import { IMAGE_GEN_CAMERA_ID } from '../core/config/app';
 import { selectNonReengagementBusy } from '../store/slices/uiSlice';
+import { selectSelectedLanguagePair } from '../store/slices/settingsSlice';
 
 // --- Utils ---
 import { getPrimaryCode } from '../shared/utils/languageUtils';
+import { createSmartRef } from '../shared/utils/smartRef';
 
 /** Delay in ms before restarting STT after language change */
 const STT_RESTART_DELAY_MS = 250;
@@ -64,18 +66,15 @@ const App: React.FC = () => {
   const addActivityToken = useMaestroStore(state => state.addActivityToken);
   const removeActivityToken = useMaestroStore(state => state.removeActivityToken);
   const isBlockingActivity = useMaestroStore(selectNonReengagementBusy);
+  const setLastFetchedSuggestionsFor = useMaestroStore(state => state.setLastFetchedSuggestionsFor);
 
   const {
     t,
     settings,
-    settingsRef,
     handleSettingsChange,
     setSettings,
     selectedLanguagePair,
-    selectedLanguagePairRef,
-    messagesRef,
     isLoadingHistory,
-    isLoadingHistoryRef,
     addMessage,
     updateMessage,
     deleteMessage,
@@ -84,14 +83,17 @@ const App: React.FC = () => {
     computeMaxMessagesForArray,
     upsertMessageTtsCache,
     upsertSuggestionTtsCache,
-    lastFetchedSuggestionsForRef,
     replySuggestions,
     setReplySuggestions,
-    replySuggestionsRef,
   } = useAppInitialization({
     maestroAvatarUriRef,
     maestroAvatarMimeTypeRef,
   });
+
+  const settingsRef = useMemo(() => createSmartRef(useMaestroStore.getState, state => state.settings), []);
+  const selectedLanguagePairRef = useMemo(() => createSmartRef(useMaestroStore.getState, selectSelectedLanguagePair), []);
+  const isLoadingHistoryRef = useMemo(() => createSmartRef(useMaestroStore.getState, state => state.isLoadingHistory), []);
+  const lastFetchedSuggestionsForRef = useMemo(() => createSmartRef(useMaestroStore.getState, state => state.lastFetchedSuggestionsFor), []);
 
   useChatPersistence();
 
@@ -133,9 +135,6 @@ const App: React.FC = () => {
 
   const attachedImageBase64 = useMaestroStore(state => state.attachedImageBase64);
   const attachedImageMimeType = useMaestroStore(state => state.attachedImageMimeType);
-
-  // Create a stable isSendingRef that will be shared across hooks
-  const sharedIsSendingRef = useRef<boolean>(false);
   
   // Re-engagement callbacks refs - will be populated after useSmartReengagement
   const scheduleReengagementRef = useRef<(reason: string, delayOverrideMs?: number) => void>(() => {});
@@ -158,18 +157,9 @@ const App: React.FC = () => {
     clearTranscript,
     claimRecordedUtterance,
     speechIsSpeakingRef,
-    recordedUtterancePendingRef,
-    pendingRecordedAudioMessageRef,
-    sttInterruptedBySendRef,
     speakMessage,
     speakWrapper,
   } = useSpeechOrchestrator({
-    settingsRef,
-    messagesRef,
-    selectedLanguagePairRef,
-    isSendingRef: sharedIsSendingRef, // Use the shared ref
-    lastFetchedSuggestionsForRef,
-    replySuggestionsRef,
     upsertMessageTtsCache,
     upsertSuggestionTtsCache,
     setMessages,
@@ -190,19 +180,13 @@ const App: React.FC = () => {
     fetchAndSetReplySuggestions,
   } = useTutorConversation({
     t,
-    settingsRef,
     setSettings,
-    selectedLanguagePairRef,
-    messagesRef,
     addMessage,
     updateMessage,
     setMessages,
-    isLoadingHistoryRef,
     getHistoryRespectingBookmark,
     computeMaxMessagesForArray,
-    lastFetchedSuggestionsForRef,
     captureSnapshot,
-    speechIsSpeakingRef,
     speakMessage,
     isSpeechSynthesisSupported,
     isListening,
@@ -211,19 +195,16 @@ const App: React.FC = () => {
     clearTranscript,
     hasPendingQueueItems,
     claimRecordedUtterance,
-    sttInterruptedBySendRef,
-    recordedUtterancePendingRef,
-    pendingRecordedAudioMessageRef,
-    scheduleReengagementRef, // Pass the ref - will be populated after useSmartReengagement
-    cancelReengagementRef, // Pass the ref - will be populated after useSmartReengagement
+    scheduleReengagementRef,
+    cancelReengagementRef,
     transcript,
     currentSystemPromptText,
     currentReplySuggestionsPromptText,
     setReplySuggestions,
-    handleToggleSuggestionModeRef, // Pass the ref - will be populated after handleToggleSuggestionMode is defined
-    maestroAvatarUriRef, // Pass avatar refs loaded in App.tsx
+    handleToggleSuggestionModeRef,
+    maestroAvatarUriRef,
     maestroAvatarMimeTypeRef,
-    setSnapshotUserError, // Pass hardware error setter
+    setSnapshotUserError,
   });
 
 
@@ -247,9 +228,6 @@ const App: React.FC = () => {
     isListening,
     startListening,
   });
-
-  // Sync the shared isSendingRef with isSending state from useMaestroController
-  useEffect(() => { sharedIsSendingRef.current = isSending; }, [isSending]);
   
   // --- Smart Reengagement ---
   // NOTE: Moved AFTER useMaestroController to have access to isSending, isSpeaking
@@ -262,7 +240,7 @@ const App: React.FC = () => {
     setReplySuggestions([]);
     // Note: isLoadingSuggestions is now managed via tokens in useMaestroController
     // Clearing suggestions above is sufficient; token will be removed when generation completes
-    lastFetchedSuggestionsForRef.current = null;
+    setLastFetchedSuggestionsFor(null);
 
     let visualReengagementShown = false;
     const currentReengageSettings = settingsRef.current.smartReengagement;
@@ -289,7 +267,7 @@ const App: React.FC = () => {
     if (!visualReengagementShown && handleSendMessageInternal) {
       await handleSendMessageInternal('', undefined, undefined, 'conversational-reengagement');
     }
-  }, [captureSnapshot, settingsRef, visualContextStreamRef, handleSendMessageInternal, isLoadingHistoryRef, isSendingRef, speechIsSpeakingRef]);
+  }, [captureSnapshot, settingsRef, visualContextStreamRef, handleSendMessageInternal, isLoadingHistoryRef, isSendingRef, speechIsSpeakingRef, setReplySuggestions, setLastFetchedSuggestionsFor]);
 
   const {
     reengagementPhase,
@@ -300,7 +278,6 @@ const App: React.FC = () => {
     isReengagementToken: _unusedIsReengagementToken,
     setReengagementPhase: _unusedSetReengagementPhase,
   } = useSmartReengagement({
-    settings,
     isLoadingHistory,
     selectedLanguagePairId: settings.selectedLanguagePairId,
     activityTokens, // Unified token set replaces isSending, isSpeaking, refs, etc.
@@ -332,15 +309,6 @@ const App: React.FC = () => {
     scheduleReengagementRef.current = scheduleReengagement;
     cancelReengagementRef.current = cancelReengagement;
   }, [scheduleReengagement, cancelReengagement]);
-
-  // ============================================================
-  // EFFECTS - Side Effects and Synchronization
-  // ============================================================
-
-  // Sync replySuggestions to ref for use by useSpeechController
-  useEffect(() => {
-    replySuggestionsRef.current = replySuggestions;
-  }, [replySuggestions]);
 
   // ============================================================
   // HANDLERS - Event Handlers and Callbacks
@@ -407,7 +375,6 @@ const App: React.FC = () => {
     const currentSttSettings = settingsRef.current.stt;
     const newSttEnabledState = !currentSttSettings.enabled;
     const nextSettings = { ...settingsRef.current, stt: { ...currentSttSettings, enabled: newSttEnabledState } };
-    settingsRef.current = nextSettings;
     setSettings(nextSettings);
 
     if (newSttEnabledState) {
@@ -478,15 +445,11 @@ const App: React.FC = () => {
     handleStopLiveSession,
   } = useLiveSessionController({
     t,
-    settingsRef,
     setSettings,
-    selectedLanguagePairRef,
-    messagesRef,
     addMessage,
     updateMessage,
     getHistoryRespectingBookmark,
     computeMaxMessagesForArray,
-    lastFetchedSuggestionsForRef,
     fetchAndSetReplySuggestions,
     upsertMessageTtsCache,
     liveVideoStream,
@@ -541,7 +504,6 @@ const App: React.FC = () => {
             onBookmarkAt={(id) => {
               setSettings(prev => {
                 const next = { ...prev, historyBookmarkMessageId: id };
-                settingsRef.current = next;
                 return next;
               });
               const pairId = settingsRef.current.selectedLanguagePairId;
@@ -553,7 +515,6 @@ const App: React.FC = () => {
               const clamped = Math.max(1, Math.min(100, Math.floor(n || MAX_VISIBLE_MESSAGES_DEFAULT)));
               setSettings(prev => { 
                 const next = { ...prev, maxVisibleMessages: clamped }; 
-                settingsRef.current = next; 
                 return next; 
               });
             }}

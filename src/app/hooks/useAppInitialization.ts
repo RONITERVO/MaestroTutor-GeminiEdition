@@ -8,6 +8,8 @@
  * - App lifecycle (title + splash removal)
  * - Asset hydration (avatar/loading gifs)
  * - Settings init + history load via store-backed hooks
+ * 
+ * Note: This hook exposes store values and actions only.
  */
 
 import { useEffect, useRef, type MutableRefObject } from 'react';
@@ -16,7 +18,6 @@ import { useAppLifecycle } from './useAppLifecycle';
 import { useAppAssets } from './useAppAssets';
 import { useAppTranslations } from '../../shared/hooks/useAppTranslations';
 import { selectSelectedLanguagePair } from '../../store/slices/settingsSlice';
-import { selectIsLoadingSuggestions } from '../../store/slices/uiSlice';
 
 export interface UseAppInitializationConfig {
   maestroAvatarUriRef: MutableRefObject<string | null>;
@@ -43,11 +44,8 @@ export const useAppInitialization = ({
 
   const settings = useMaestroStore(state => state.settings);
   const selectedLanguagePair = useMaestroStore(selectSelectedLanguagePair);
-  const messages = useMaestroStore(state => state.messages);
   const isLoadingHistory = useMaestroStore(state => state.isLoadingHistory);
   const replySuggestions = useMaestroStore(state => state.replySuggestions);
-  const lastFetchedSuggestionsFor = useMaestroStore(state => state.lastFetchedSuggestionsFor);
-  const isLoadingSuggestions = useMaestroStore(selectIsLoadingSuggestions);
 
   const initSettings = useMaestroStore(state => state.initSettings);
   const updateSetting = useMaestroStore(state => state.updateSetting);
@@ -62,25 +60,6 @@ export const useAppInitialization = ({
   const upsertMessageTtsCache = useMaestroStore(state => state.upsertMessageTtsCache);
   const upsertSuggestionTtsCache = useMaestroStore(state => state.upsertSuggestionTtsCache);
   const setReplySuggestions = useMaestroStore(state => state.setReplySuggestions);
-
-  const settingsRef = useRef(settings);
-  const selectedLanguagePairRef = useRef(selectedLanguagePair);
-  const messagesRef = useRef(messages);
-  const isLoadingHistoryRef = useRef(isLoadingHistory);
-  const replySuggestionsRef = useRef(replySuggestions);
-  const lastFetchedSuggestionsForRef = useRef(lastFetchedSuggestionsFor);
-  const isLoadingSuggestionsRef = useRef(isLoadingSuggestions);
-
-  // Consolidate all ref syncs into a single effect for efficiency
-  useEffect(() => {
-    settingsRef.current = settings;
-    selectedLanguagePairRef.current = selectedLanguagePair;
-    messagesRef.current = messages;
-    isLoadingHistoryRef.current = isLoadingHistory;
-    replySuggestionsRef.current = replySuggestions;
-    lastFetchedSuggestionsForRef.current = lastFetchedSuggestionsFor;
-    isLoadingSuggestionsRef.current = isLoadingSuggestions;
-  }, [settings, selectedLanguagePair, messages, isLoadingHistory, replySuggestions, lastFetchedSuggestionsFor, isLoadingSuggestions]);
 
   const prevPairIdRef = useRef<string | null>(null);
 
@@ -101,14 +80,10 @@ export const useAppInitialization = ({
   return {
     t,
     settings,
-    settingsRef,
     handleSettingsChange: updateSetting,
     setSettings,
     selectedLanguagePair,
-    selectedLanguagePairRef,
-    messagesRef,
     isLoadingHistory,
-    isLoadingHistoryRef,
     addMessage,
     updateMessage,
     deleteMessage,
@@ -117,11 +92,8 @@ export const useAppInitialization = ({
     computeMaxMessagesForArray,
     upsertMessageTtsCache,
     upsertSuggestionTtsCache,
-    lastFetchedSuggestionsForRef,
     replySuggestions,
     setReplySuggestions,
-    replySuggestionsRef,
-    isLoadingSuggestionsRef,
   };
 };
 
