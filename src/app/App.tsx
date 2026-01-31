@@ -44,6 +44,7 @@ import { selectSelectedLanguagePair } from '../store/slices/settingsSlice';
 import { getPrimaryCode } from '../shared/utils/languageUtils';
 import { createSmartRef } from '../shared/utils/smartRef';
 import { useApiKey } from '../shared/hooks/useApiKey';
+import { SmallSpinner } from '../shared/ui/SmallSpinner';
 
 /** Delay in ms before restarting STT after language change */
 const STT_RESTART_DELAY_MS = 250;
@@ -509,7 +510,7 @@ const App: React.FC = () => {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="image-placeholder-spinner mx-auto"></div>
+          <SmallSpinner className="w-8 h-8 text-gray-500 block mx-auto" />
           <p className="mt-2 text-gray-600">Loading app...</p>
         </div>
       </div>
@@ -520,7 +521,7 @@ const App: React.FC = () => {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="image-placeholder-spinner mx-auto"></div>
+          <SmallSpinner className="w-8 h-8 text-gray-500 block mx-auto" />
           <p className="mt-2 text-gray-600">{t('chat.loadingHistory')}</p>
         </div>
       </div>
