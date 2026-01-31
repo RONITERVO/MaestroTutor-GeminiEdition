@@ -3,6 +3,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { clearApiKey, isLikelyApiKey, loadApiKey, normalizeApiKey, setApiKey } from '../../core/security/apiKeyStorage';
 
+const dispatchApiKeyChanged = (hasKey: boolean) => {
+  try {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('maestro-api-key-changed', { detail: { hasKey } }));
+    }
+  } catch {
+    // ignore
+  }
+};
+
 export const useApiKey = () => {
   const [apiKey, setApiKeyState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -41,6 +51,7 @@ export const useApiKey = () => {
       await setApiKey(value);
       setApiKeyState(value);
       setError(null);
+      dispatchApiKeyChanged(true);
       return true;
     } catch {
       setError('Failed to save API key securely. Please try again.');
@@ -52,6 +63,7 @@ export const useApiKey = () => {
     await clearApiKey();
     setApiKeyState(null);
     setError(null);
+    dispatchApiKeyChanged(false);
   }, []);
 
   const maskedKey = apiKey ? `${apiKey.slice(0, 4)}••••${apiKey.slice(-4)}` : null;
