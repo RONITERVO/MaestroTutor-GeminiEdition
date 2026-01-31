@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { ChatMessage, SpeechPart } from '../../../core/types';
 import { TranslationReplacements } from '../../../core/i18n/index';
 import { IconPaperclip, IconXMark, IconPencil, IconUndo, IconGripCorner, IconCheck } from '../../../shared/ui/Icons';
+import { SmallSpinner } from '../../../shared/ui/SmallSpinner';
 import TextScrollwheel from './TextScrollwheel';
 import { useMaestroStore } from '../../../store';
 import { selectSettings, selectSelectedLanguagePair, selectTargetLanguageDef, selectNativeLanguageDef } from '../../../store/slices/settingsSlice';
@@ -57,6 +58,7 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
   const [isAnnotating, setIsAnnotating] = useState(false);
   const [annotationSourceUrl, setAnnotationSourceUrl] = useState<string | null>(null);
   const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(null);
+  const [loadingGifError, setLoadingGifError] = useState(false);
 
   const isAnnotationActive = isAnnotating && isFocusedMode;
   const isAssistant = message.role === 'assistant';
@@ -556,6 +558,10 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
     return source[idx];
   }, [message.id, message.imageGenerationStartTime, message.isGeneratingImage, loadingGifs]);
 
+  useEffect(() => {
+    setLoadingGifError(false);
+  }, [selectedLoadingGif, message.id, message.isGeneratingImage]);
+
   const applyFocusedImageStyles = isFocusedMode && (isImageSuccessfullyDisplayed || message.isGeneratingImage || isFileSuccessfullyDisplayed || isVideoSuccessfullyDisplayed || isAudioSuccessfullyDisplayed);
   
   if (message.thinking && !message.isGeneratingImage) {
@@ -652,20 +658,18 @@ const ChatMessageBubble: React.FC<ChatMessageBubbleProps> = React.memo(({
                 >
                   {message.isGeneratingImage && (
                       <div className="absolute top-2 right-2 flex flex-col items-end z-20">
-                        {selectedLoadingGif ? (
-                          <div className="w-36 h-36 rounded-full overflow-hidden bg-black/30 drop-shadow-md flex items-center justify-center">
+                        <div className="w-8 h-8 rounded-full overflow-hidden bg-black/30 drop-shadow-md flex items-center justify-center">
+                          {selectedLoadingGif && !loadingGifError ? (
                             <img
                               src={selectedLoadingGif}
                               alt={t('chat.imagePreview.alt')}
-                              className="w-full h-full object-cover opacity-90"
+                              className="w-full h-full object-contain opacity-90"
+                              onError={() => setLoadingGifError(true)}
                             />
-                          </div>
-                        ) : (
-                          <svg className="animate-spin h-8 w-8 text-slate-100" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                        )}
+                          ) : (
+                            <SmallSpinner className="w-full h-full text-slate-100" />
+                          )}
+                        </div>
                         {remainingTimeDisplay && (
                           <p className={`mt-1 text-right text-xs px-1.5 py-0.5 rounded ${applyFocusedImageStyles ? 'text-slate-200 bg-slate-800/60' : 'text-gray-700 bg-gray-100/70'}`}>
                             {remainingTimeDisplay}
