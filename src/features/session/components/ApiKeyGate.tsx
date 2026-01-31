@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
+import { Capacitor } from '@capacitor/core';
 import { IconCheck, IconChevronLeft, IconChevronRight, IconQuestionMarkCircle, IconShield, IconXMark } from '../../../shared/ui/Icons';
 import { useAppTranslations } from '../../../shared/hooks/useAppTranslations';
 import { openExternalUrl } from '../../../shared/utils/openExternalUrl';
+import { isLikelyApiKey, normalizeApiKey } from '../../../core/security/apiKeyStorage';
 
 interface ApiKeyGateProps {
   isOpen: boolean;
@@ -82,6 +85,30 @@ const ApiKeyGate: React.FC<ApiKeyGateProps> = ({
   const handleInstructionJump = (nextIndex: number) => {
     setInstructionIndex(nextIndex);
     setIsAutoPlaying(false);
+  };
+
+  const attemptAutoPasteFromClipboard = async () => {
+    if (value.trim()) return;
+
+    let clipboardText = '';
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const { value } = await Clipboard.read();
+        clipboardText = value || '';
+      } else if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+        clipboardText = await navigator.clipboard.readText();
+      }
+    } catch {
+      // Ignore clipboard read failures
+    }
+
+    if (!clipboardText) return;
+
+    const normalized = normalizeApiKey(clipboardText);
+    if (!normalized || !isLikelyApiKey(normalized) || /\s/.test(normalized)) return;
+    setValue(normalized);
+    onValueChange?.(normalized);
   };
 
   if (!isOpen) return null;
@@ -206,6 +233,7 @@ const ApiKeyGate: React.FC<ApiKeyGateProps> = ({
                     setValue(next);
                     onValueChange?.(next);
                   }}
+                  onClick={attemptAutoPasteFromClipboard}
                   placeholder={t('apiKeyGate.placeholder')}
                   className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   autoFocus
